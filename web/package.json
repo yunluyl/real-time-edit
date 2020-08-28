@@ -1,0 +1,19 @@
+{
+  "name": "coedit",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && next export",
+    "start": "next start"
+  },
+  "dependencies": {
+    "jot": "git+https://github.com/joshdata/jot.git",
+    "next": "9.5.2",
+    "prismjs": "^1.21.0",
+    "react": "16.13.1",
+    "react-dom": "16.13.1",
+    "react-textarea-autosize": "^8.2.0",
+    "uuid": "^8.3.0"
+  }
+}
