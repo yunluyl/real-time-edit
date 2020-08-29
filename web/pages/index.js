@@ -32,7 +32,7 @@ class IndexPage extends Component {
   }
 
   componentDidMount() {
-    this.socket = new WebSocket("ws://localhost:8844/ws?hub=aaa");
+    this.socket = new WebSocket("ws://52.25.139.237:8844/ws?hub=aaa");
     this.socket.onopen = function (event) {
         console.log("websocket connected!");
         let message = {
