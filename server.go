@@ -15,9 +15,9 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/ws", wsHandler)
 	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
-	addr := ":8844"
+	addr := ":443"
 	log.Println("Starting server at: http://" + addr)
-	log.Fatal(http.ListenAndServe(addr, router))
+	log.Fatal(http.ListenAndServeTLS(addr, "./server.crt", "./server.key", router))
 }
 
 
