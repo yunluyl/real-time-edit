@@ -15,7 +15,7 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/ws", wsHandler)
 	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
-	addr := "localhost:8844"
+	addr := ":8844"
 	log.Println("Starting server at: http://" + addr)
 	log.Fatal(http.ListenAndServe(addr, router))
 }

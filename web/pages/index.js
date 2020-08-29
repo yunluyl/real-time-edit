@@ -34,8 +34,15 @@ class IndexPage extends Component {
   componentDidMount() {
     this.socket = new WebSocket("ws://localhost:8844/ws?hub=aaa");
     this.socket.onopen = function (event) {
-      console.log("websocket connected!")
-    };
+        console.log("websocket connected!");
+        let message = {
+            uid: uuidv4(),
+            endpoint: 'FILE_UPDATE',
+            index: -1,
+            operations: [],
+        };
+        this.socket.send(JSON.stringify(message));
+    }.bind(this);
     this.socket.onmessage = function (event) {
         let data = JSON.parse(event.data);
         if (data.endpoint === "FILE_UPDATE") {
@@ -74,7 +81,7 @@ class IndexPage extends Component {
                             if (this.bufferOp) localOp = this.bufferOp;
                         }
                     }
-                    this.committedFile = remoteOp.apply(this.committedFile);
+                    if (remoteOp) this.committedFile = remoteOp.apply(this.committedFile);
                     this.opIndex += data.operations.length;
                     if (localOp) {
                         this.state.file = localOp.apply(this.committedFile);
@@ -116,7 +123,7 @@ class IndexPage extends Component {
       this.state.file.cells[index]['source'] = source;
       let op = jot.diff(oldFile, this.state.file);
       if (this.bufferOp) op = this.bufferOp.compose(op);
-      if (this.outstandingOp) {
+      if (this.outstandingOp != null || this.socket.readyState !== this.socket.OPEN) {
           this.bufferOp = op;
       }
       else {
