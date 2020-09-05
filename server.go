@@ -13,8 +13,8 @@ var userId = 0
 
 func main() {
 	router := mux.NewRouter()
-	router.HandleFunc("/ws", wsHandler)
-	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
+	router.HandleFunc("/", wsHandler)
+	//router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
 	addr := ":80"
 	log.Println("Starting server at: http://" + addr)
 	log.Fatal(http.ListenAndServe(addr, router))
