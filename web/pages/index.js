@@ -35,9 +35,9 @@ class IndexPage extends Component {
   }
 
   componentDidMount() {
-    this.socket = new WebSocket("wss://socket.syncpoint.xyz?hub=aaa");
+    this.socket = new WebSocket("wss://api.syncpoint.xyz?hub=aaa");
     this.socket.onopen = function (event) {
-      console.log("websocket connected 06!");
+      console.log("websocket connected!");
       this.sendMessage({
         uid: uuidv4(),
         endpoint: 'FILE_UPDATE',

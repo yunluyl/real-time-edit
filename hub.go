@@ -23,7 +23,7 @@ type Hub struct {
 
 func newHub(name string) *Hub {
 	return &Hub{
-		name: name,
+		name:       name,
 		inbound:    make(chan *Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -64,7 +64,7 @@ func (h *Hub) run() {
 					for _, dest := range retMessage.Route {
 						routes[dest] = true
 					}
-					for client, _ := range h.clients {
+					for client := range h.clients {
 						if _, ok := routes[client.userId]; ok {
 							h.sendMessage(client, retMessage)
 						}
