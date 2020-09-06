@@ -8,6 +8,8 @@ import styles from '../styles/Index.module.css'
 class IndexPage extends Component {
   constructor(props) {
     super(props);
+    this.hubName = "aaa";
+    this.fileName = "/home/jupyter/tutorils/test.ipynb"
     this.state = {
       file: {
         cells: [],
@@ -35,12 +37,13 @@ class IndexPage extends Component {
   }
 
   componentDidMount() {
-    this.socket = new WebSocket("wss://api.syncpoint.xyz?hub=aaa");
+    this.socket = new WebSocket("wss://api.syncpoint.xyz?hub=" + this.hubName);
     this.socket.onopen = function (event) {
       console.log("websocket connected!");
       this.sendMessage({
         uid: uuidv4(),
         endpoint: 'FILE_UPDATE',
+        file: this.fileName,
         index: -1,
         operations: [],
       });
@@ -194,6 +197,7 @@ class IndexPage extends Component {
     this.sendMessage({
       uid: uuidv4(),
       endpoint: 'FILE_UPDATE',
+      file: this.fileName,
       index: this.committedOpIndex + 1,
       operations: [this.localOpBuffer.serialize()],
     });

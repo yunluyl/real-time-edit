@@ -63,6 +63,7 @@ func (c *Client) readPump() {
 			}
 			break
 		}
+		message.hubName = c.hub.name
 		message.client = c
 		c.hub.inbound <- &message
 	}
