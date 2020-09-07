@@ -8,7 +8,7 @@ import styles from '../styles/Index.module.css'
 class IndexPage extends Component {
   constructor(props) {
     super(props);
-    this.hubName = "aaa";
+    this.hubName = Router.query.hub;
     this.fileName = "/home/jupyter/tutorils/test.ipynb"
     this.state = {
       file: {
