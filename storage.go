@@ -17,6 +17,7 @@ var (
 	operationCollection *firestore.CollectionRef
 )
 
+// OperationEntry is the schema of the database entry for transformational operations
 type OperationEntry struct {
 	Hub string `firestore:"hub"`
 

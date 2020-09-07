@@ -65,7 +65,7 @@ func (h *Hub) run() {
 						routes[dest] = true
 					}
 					for client := range h.clients {
-						if _, ok := routes[client.userId]; ok {
+						if _, ok := routes[client.userID]; ok {
 							h.sendMessage(client, retMessage)
 						}
 					}

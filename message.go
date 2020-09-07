@@ -14,6 +14,7 @@ const (
 	statusEndpointNotValid     = "ENDPOINT_NOT_VALID"
 )
 
+// Message defines the Websocket message between browser and this real-time server
 type Message struct {
 	UID string `json:"uid"`
 

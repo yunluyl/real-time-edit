@@ -9,7 +9,7 @@ import (
 )
 
 var hubs = make(map[string]*Hub)
-var userId = 0
+var userID = 0
 
 func main() {
 	defer firestoreClient.Close()
@@ -36,6 +36,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		hubs[hubName] = hub
 		go hub.run()
 	}
-	serveWs(strconv.Itoa(userId), hub, w, r)
-	userId++
+	serveWs(strconv.Itoa(userID), hub, w, r)
+	userID++
 }
