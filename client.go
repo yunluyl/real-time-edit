@@ -19,7 +19,7 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 
 	// Maximum message size allowed from peer.
-	maxMessageSize = 65536
+	maxMessageSize = 9223372036854775807
 )
 
 var upgrader = websocket.Upgrader{
@@ -119,4 +119,3 @@ func serveWs(userId string, hub *Hub, w http.ResponseWriter, r *http.Request) {
 	go client.writePump()
 	go client.readPump()
 }
-
