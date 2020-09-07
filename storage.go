@@ -10,30 +10,30 @@ import (
 	"google.golang.org/api/iterator"
 
 	"cloud.google.com/go/firestore"
-	"github.com/mitchellh/mapstructure"
 )
 
 var (
-	client              *firestore.Client
+	firestoreClient     *firestore.Client
 	operationCollection *firestore.CollectionRef
 )
 
 type OperationEntry struct {
-	hub string
+	Hub string `firestore:"hub"`
 
-	file string
+	File string `firestore:"file"`
 
-	index int64
+	Index int64 `firestore:"index"`
 
-	op string
+	Op string `firestore:"op"`
 }
 
 func init() {
-	client, err := firestore.NewClient(context.Background(), "yunlu-test")
+	var err error
+	firestoreClient, err = firestore.NewClient(context.Background(), "yunlu-test")
 	if err != nil {
-		log.Fatal("initiate Firestore client failed: %+v")
+		log.Fatalf("initiate Firestore client failed: %+v", err)
 	}
-	operationCollection = client.Collection("operations")
+	operationCollection = firestoreClient.Collection("operations")
 }
 
 func commitOperations(
@@ -61,39 +61,53 @@ func commitOperations(
 			return statusOperationCommitError, idx, []string{}, err.Error()
 		}
 		data := &OperationEntry{}
-		mapstructure.Decode(doc.Data(), &data)
+		convertErr := doc.DataTo(data)
+		if convertErr != nil {
+			log.Printf("Data conversion error: %+v", err)
+			return statusOperationCommitError, idx, []string{}, err.Error()
+		}
 		if start == -1 {
-			start = data.index
-			count = data.index
-		} else if data.index-count == 1 {
+			start = data.Index
+			count = data.Index
+		} else if data.Index-count == 1 {
 			count++
 		} else {
-			msg := fmt.Sprintf("Query operation not in sequence prev index: %d, cur index: %d", count, data.index)
+			msg := fmt.Sprintf("Query operation not in sequence prev index: %d, cur index: %d", count, data.Index)
 			log.Println(msg)
 			return statusOperationCommitError, idx, []string{}, msg
 		}
-		retOps = append(retOps, data.op)
+		retOps = append(retOps, data.Op)
 	}
-	if start == -1 {
-		log.Printf("operation index: %d larger than upper bound", idx)
-		return statusOperationTooNew, idx, []string{}, ""
-	} else if start == idx-1 && len(retOps) == 1 {
-		batch := client.Batch()
+	if idx < 0 {
+		if start == -1 {
+			start = 0
+		}
+		return statusOperationTooOld, start, retOps, ""
+	} else if start == idx-1 && (len(retOps) == 1 || idx == 0) {
+		if len(ops) > 500 {
+			msg := fmt.Sprintf("length of operations: %d in message is larger than 500", len(ops))
+			log.Println(msg)
+			return statusOperationCommitError, idx, []string{}, msg
+		}
+		batch := firestoreClient.Batch()
 		for i, op := range ops {
 			operationEntry := &OperationEntry{
-				hub:   hubName,
-				file:  file,
-				index: idx + int64(i),
-				op:    op,
+				Hub:   hubName,
+				File:  file,
+				Index: idx + int64(i),
+				Op:    op,
 			}
 			docRef := operationCollection.Doc(generateDocID(operationEntry))
-			batch.Create(docRef, operationEntry)
+			batch.Create(docRef, *operationEntry)
 		}
 		_, err := batch.Commit(context.Background())
 		if err != nil {
 			return statusOperationCommitError, idx, []string{}, err.Error()
 		}
 		return statusOperationCommitted, idx, ops, ""
+	} else if start == -1 {
+		log.Printf("operation index: %d larger than upper bound", idx)
+		return statusOperationTooNew, idx, []string{}, ""
 	} else if start > idx {
 		log.Printf("operation index: %d smaller than lower bound: %d", idx, start)
 		return statusOperationTooOld, start, retOps, ""
@@ -104,11 +118,11 @@ func commitOperations(
 
 func generateDocID(operationEntry *OperationEntry) string {
 	return base64.StdEncoding.EncodeToString([]byte(
-		operationEntry.hub +
+		operationEntry.Hub +
 			"###" +
-			operationEntry.file +
+			operationEntry.File +
 			"###" +
-			strconv.FormatInt(operationEntry.index, 10)))
+			strconv.FormatInt(operationEntry.Index, 10)))
 }
 
 func create(operationEntry *OperationEntry) error {

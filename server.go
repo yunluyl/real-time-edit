@@ -2,7 +2,7 @@ package main
 
 import (
 	"log"
-    "net/http"
+	"net/http"
 	"strconv"
 
 	"github.com/gorilla/mux"
@@ -12,6 +12,7 @@ var hubs = make(map[string]*Hub)
 var userId = 0
 
 func main() {
+	defer firestoreClient.Close()
 	router := mux.NewRouter()
 	router.HandleFunc("/", wsHandler)
 	//router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
@@ -19,7 +20,6 @@ func main() {
 	log.Println("Starting server at: http://" + addr)
 	log.Fatal(http.ListenAndServe(addr, router))
 }
-
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// TODO(yunlu): authentication, get user ID, IAM check for hub access

@@ -62,21 +62,25 @@ class IndexPage extends Component {
           );
         }
         if (message.status === "OP_COMMITTED") {
-          if (message.index - this.remoteIndexBuffer !== 1)
+          if (message.index - this.remoteIndexBuffer !== 1) {
             console.error(
               'OP can only be committed in continuous sequence remote index: '
               + message.index
               + ' local index: '
               + this.remoteIndexBuffer
             );
+            console.error(message);
+          }
           else {
             if (message.resp) this.handleSelfCommits(message);
             else this.handleRemoteCommits(message);
           }
         } else if (message.status === "OP_TOO_OLD")
           this.handleRemoteCommits(message);
-        else
+        else {
           console.error('wrong file update return status: ' + message.status);
+          console.error(message);
+        }
       }
     }.bind(this);
     this.intervalID = setInterval(() => {
