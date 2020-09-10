@@ -1,10 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
-import jot from 'jot';
+import { type as jot } from 'ot-json0';
 
 export default class RealtimeFile {
-    constructor(fileName, base, socket, fileChangeCallback) {
+    constructor(fileName, base, sockets, fileChangeCallback) {
         this.fileName = fileName;
-        this.socket = socket;
+        this.sockets = sockets;
         this.fileChangeCallback = fileChangeCallback;
         this.committedFile = JSON.parse(JSON.stringify(base));
         this.committedOpIndex = -1;
@@ -28,31 +28,30 @@ export default class RealtimeFile {
 
     changeResolver() {
         if (this.outstandingMessageUid === "") {
-            console.log('---file change resolver triggered---');
             let committedFileChanged = false;
             let displayFileState;
             let displayFileStatePending = false;
             if (this.outstandingOp != null && !this.outstandingOpSuccess) {
                 if (this.localOpBuffer)
-                    this.localOpBuffer = this.outstandingOp.compose(this.localOpBuffer);
+                    this.localOpBuffer = jot.compose(this.outstandingOp, this.localOpBuffer);
                 else this.localOpBuffer = this.outstandingOp;
                 this.outstandingOp = null;
             }
             if (this.localOpBuffer != null && this.remoteOpBuffer != null) {
                 console.log('local op before rebase');
-                console.log(this.localOpBuffer.serialize());
-                this.localOpBuffer = this.localOpBuffer.rebase(this.remoteOpBuffer);
+                console.log(this.localOpBuffer);
+                this.localOpBuffer = jot.transform(this.localOpBuffer, this.remoteOpBuffer, 'right');
                 console.log('local op after rebase');
-                if (this.localOpBuffer) console.log(this.localOpBuffer.serialize());
+                if (this.localOpBuffer) console.log(this.localOpBuffer);
                 else console.log('null');
             }
             if (this.outstandingOpSuccess) {
                 console.log('commit self op: ' + (this.committedOpIndex + 1) + ' - ' + this.remoteIndexBuffer);
                 console.log('self op');
-                console.log(this.outstandingOp.serialize());
+                console.log(this.outstandingOp);
                 console.log('committed file before self op apply');
                 console.log(JSON.stringify(this.committedFile));
-                this.committedFile = JSON.parse(JSON.stringify(this.outstandingOp.apply(this.committedFile)));
+                this.committedFile = jot.apply(jot.create(this.committedFile), this.outstandingOp);
                 console.log('committed file after self op apply');
                 console.log(JSON.stringify(this.committedFile));
                 this.committedOpIndex = this.remoteIndexBuffer;
@@ -63,10 +62,10 @@ export default class RealtimeFile {
             if (this.remoteOpBuffer) {
                 console.log('commit remote op: ' + (this.committedOpIndex + 1) + ' - ' + this.remoteIndexBuffer);
                 console.log('remote op');
-                console.log(this.remoteOpBuffer.serialize());
+                console.log(this.remoteOpBuffer);
                 console.log('committed file before apply remote');
                 console.log(JSON.stringify(this.committedFile));
-                this.committedFile = JSON.parse(JSON.stringify(this.remoteOpBuffer.apply(this.committedFile)));
+                this.committedFile = jot.apply(jot.create(this.committedFile), this.remoteOpBuffer);
                 console.log('committed file after apply remote');
                 console.log(JSON.stringify(this.committedFile));
                 this.committedOpIndex = this.remoteIndexBuffer;
@@ -75,12 +74,18 @@ export default class RealtimeFile {
             }
             if (this.localOpBuffer) {
                 console.log('send local op with index ' + (this.committedOpIndex + 1));
-                console.log(this.localOpBuffer.serialize());
-                displayFileState = JSON.parse(JSON.stringify(this.localOpBuffer.apply(this.committedFile)));
+                console.log(this.localOpBuffer);
+                console.log('committed file state before local apply');
+                console.log(JSON.stringify(this.committedFile));
+                displayFileState = jot.apply(jot.create(this.committedFile), this.localOpBuffer);
+                console.log('display file state after local apply');
+                console.log(displayFileState);
+                console.log('committed file state after local apply');
+                console.log(JSON.stringify(this.committedFile));
                 displayFileStatePending = true;
                 this.sendLocalOpBuffer();
             } else if (committedFileChanged) {
-                displayFileState = JSON.parse(JSON.stringify(this.committedFile));
+                displayFileState = jot.create(this.committedFile);
                 displayFileStatePending = true;
             }
             if (displayFileStatePending) this.fileChangeCallback(displayFileState);
@@ -91,7 +96,7 @@ export default class RealtimeFile {
         console.log('received remote op - length: ' + message.operations.length);
         let remoteOp = this.mergeRemoteOperations(message.index, message.operations);
         if (remoteOp != null) {
-            if (this.remoteOpBuffer) this.remoteOpBuffer = this.remoteOpBuffer.compose(remoteOp);
+            if (this.remoteOpBuffer) this.remoteOpBuffer = jot.compose(this.remoteOpBuffer, remoteOp);
             else this.remoteOpBuffer = remoteOp;
         }
         this.remoteIndexBuffer += message.operations.length - this.remoteIndexBuffer + message.index - 1;
@@ -109,8 +114,8 @@ export default class RealtimeFile {
             let start = this.remoteIndexBuffer - remoteIndex + 1;
             if (start < 0) return null;
             for (let i = start; i < operations.length; i++) {
-                if (op) op = op.compose(jot.deserialize(operations[i]));
-                else op = jot.deserialize(operations[i]);
+                if (op) op = jot.compose(op, JSON.parse(operations[i]));
+                else op = JSON.parse(operations[i]);
             }
         }
         return op;
@@ -121,12 +126,12 @@ export default class RealtimeFile {
             console.error('only one outstanding message can be sent at a time');
             return;
         }
-        if (this.socket.readyState !== this.socket.OPEN) {
+        if (this.sockets[0].readyState !== this.sockets[0].OPEN) {
             console.error('try to send message when socket is not open');
             return;
         }
         this.outstandingMessageUid = message.uid;
-        this.socket.send(JSON.stringify(message));
+        this.sockets[0].send(JSON.stringify(message));
         console.log('---sent message---');
     }
 
@@ -179,15 +184,15 @@ export default class RealtimeFile {
             endpoint: 'FILE_UPDATE',
             file: this.fileName,
             index: this.committedOpIndex + 1,
-            operations: [this.localOpBuffer.serialize()],
+            operations: [JSON.stringify(this.localOpBuffer)],
         });
-        this.outstandingOp = jot.deserialize(this.localOpBuffer.serialize());
+        this.outstandingOp = JSON.parse(JSON.stringify(this.localOpBuffer));
         this.localOpBuffer = null;
     }
 
     handleLocalChange(localOp) {
         if (localOp) {
-            if (this.localOpBuffer) this.localOpBuffer = this.localOpBuffer.compose(localOp);
+            if (this.localOpBuffer) this.localOpBuffer = jot.compose(this.localOpBuffer, localOp);
             else this.localOpBuffer = localOp;
         }
     }
