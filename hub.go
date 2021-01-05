@@ -1,6 +1,8 @@
 package main
 
-import "log"
+import (
+	"log"
+)
 
 // Hub maintains the set of active clients and send messages to the
 // clients based on processor rules.
@@ -21,6 +23,20 @@ type Hub struct {
 	unregister chan *Client
 }
 
+func createOrRetrieveHub(hubName string, userID string) (*Hub, error) {
+	// If !exists then create and register owner user
+	// Doing this here means that we will avoid a situation where a hub doesn't have an owner.
+	if len(db.hubOwners(hubName)) < 1 {
+		log.Printf("Creating hub %s in db", hubName)
+		err := db.createHub(userID, hubName)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Finally create backend reference to the hub.
+	return newHub(hubName), nil
+}
+
 func newHub(name string) *Hub {
 	return &Hub{
 		name:       name,
@@ -39,7 +55,14 @@ func (h *Hub) run() {
 			if !ok {
 				return
 			}
+			// The minimum permissions for hub access is read access
+			if !db.connectUser(client.userID, h.name) {
+				log.Printf("User %s does not have permission to access hub %s", client.userID, h.name)
+				h.closeClient(client)
+				return
+			}
 			h.clients[client] = true
+			// TODO(andrezhu@): push message of hub file list
 		case client, ok := <-h.unregister:
 			if !ok {
 				return
@@ -48,6 +71,7 @@ func (h *Hub) run() {
 				h.closeClient(client)
 			}
 		case message, ok := <-h.inbound:
+			// Auth check is in processMessage.
 			if !ok {
 				return
 			}
