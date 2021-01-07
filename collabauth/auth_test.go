@@ -1,18 +1,14 @@
 package collabauth
 
 import (
+	"collabserver/storage"
+	testutils "collabserver/testing"
 	"context"
 	"log"
 	"testing"
 
 	"cloud.google.com/go/firestore"
 )
-
-const (
-	testHub = "TESTING"
-)
-
-var ()
 
 func newFirestoreTestClient(ctx context.Context) *firestore.Client {
 	client, err := firestore.NewClient(ctx, "test")
@@ -27,31 +23,29 @@ func newFirestoreTestClient(ctx context.Context) *firestore.Client {
 func newAuthenticator(client *firestore.Client) *firestoreAuthenticator {
 	// populate the table
 	auth := client.Collection("test_authentication")
-	auth.Add(context.Background(), AuthEntry{
+	auth.Doc("owner").Set(context.Background(), AuthEntry{
 		UserID: "owner",
-		Hub:    testHub,
 		Role:   Owner,
 	})
 
-	auth.Add(context.Background(), AuthEntry{
+	auth.Doc("writer").Set(context.Background(), AuthEntry{
 		UserID: "writer",
-		Hub:    testHub,
 		Role:   Writer,
 	})
 
-	auth.Add(context.Background(), AuthEntry{
+	auth.Doc("reader").Set(context.Background(), AuthEntry{
 		UserID: "reader",
-		Hub:    testHub,
 		Role:   Viewer,
 	})
 
 	return &firestoreAuthenticator{
 		authTable: auth,
+		db:        storage.DB,
 	}
 }
 
 func TestVerifyAccess(t *testing.T) {
-	client := newFirestoreTestClient(context.Background())
+	client := testutils.NewFirestoreTestClient(context.Background())
 	auth := newAuthenticator(client)
 
 	cases := []struct {
@@ -109,7 +103,7 @@ func TestVerifyAccess(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, op := range tc.ops {
-				if ok, _ := auth.verifyAccess(tc.userID, testHub, op); ok != tc.expected {
+				if ok, _ := auth.verifyAccess(tc.userID, op); ok != tc.expected {
 					t.Errorf("verifyAccess gave the wrong access for role %s and operation %s: got %t, want %t",
 						tc.userID, op, ok, tc.expected)
 				}
@@ -120,38 +114,41 @@ func TestVerifyAccess(t *testing.T) {
 }
 
 func TestRoleForUserID(t *testing.T) {
-	client := newFirestoreTestClient(context.Background())
+	client := testutils.NewFirestoreTestClient(context.Background())
 	auth := newAuthenticator(client)
 
 	cases := []struct {
 		name     string
-		hub      string
 		userID   string
 		expected string
+		hasError bool
 	}{
 		{
 			name:     "gives correct role",
-			hub:      testHub,
 			userID:   "owner",
 			expected: Owner,
 		},
 		{
-			name:     "nonexistent hub gives no role",
-			hub:      "fakeHub",
-			userID:   "owner",
-			expected: NoRole,
-		},
-		{
 			name:     "nonexistent user gives no role",
-			hub:      testHub,
 			userID:   "fakeUser",
 			expected: NoRole,
+			hasError: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if actual, _ := auth.roleForUserID(tc.hub, tc.userID); actual != tc.expected {
-				t.Errorf("roleForUserID, for hub %s, gave role %s but want %s", tc.hub, actual, tc.expected)
+			actual, _, err := auth.roleForUserID(tc.userID)
+			hasError := err != nil
+			if hasError != tc.hasError {
+				// For saying if we did or did not expect an error to be returned.
+				var descriptionString string
+				if tc.hasError {
+					descriptionString = "not"
+				}
+				t.Errorf("roleForUserID gave unexpected error response %v when expecting to %s have error", err, descriptionString)
+			}
+			if actual != tc.expected {
+				t.Errorf("roleForUserID gave role %s but want %s", actual, tc.expected)
 			}
 		})
 	}

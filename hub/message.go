@@ -1,19 +1,13 @@
-package main
+package hub
 
 const (
 	endpointPassthrough = "PASSTHROUGH"
 	endpointFileUpdate  = "FILE_UPDATE"
+	endpointFileCreate  = "FILE_CREATE"
 	endpointModifyUser  = "MODIFY_USER"
 
 	routeBroadcast = "BROADCAST"
 	routeOrigin    = "ORIGIN"
-
-	statusOperationCommitted   = "OP_COMMITTED"
-	statusOperationCommitError = "OP_COMMIT_ERR"
-	statusOperationTooNew      = "OP_TOO_NEW"
-	statusOperationTooOld      = "OP_TOO_OLD"
-	statusEndpointNotValid     = "ENDPOINT_NOT_VALID"
-	statusEndpointUnauthorized = "ENDPOINT_UNAUTHORIZED"
 
 	userAdd    = "ADD"
 	userRemove = "REMOVE"

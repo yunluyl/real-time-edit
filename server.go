@@ -1,10 +1,12 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"strings"
+
+	"collabserver/hub"
+	"collabserver/storage"
 
 	"github.com/gorilla/mux"
 )
@@ -13,10 +15,10 @@ const (
 	authHeader = "Sec-WebSocket-Protocol"
 )
 
-var hubs = make(map[string]*Hub)
+var hubs = make(map[string]*hub.Hub)
 
 func main() {
-	defer firestoreClient.Close()
+	defer storage.Close()
 	router := mux.NewRouter()
 	router.HandleFunc("/", wsHandler)
 	//router.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/out/")))
@@ -25,6 +27,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, router))
 }
 
+// wsHandler handles incoming Websocket connections. It requires a hub in the url (i.e.
+// localhost:8080?hub=ABCDEF) and an auth token in the Sec-WebSocket-Protocol header.
+// In javascript/typescript, this is fulfilled by the second parameter of the Websocket
+// constructor: (i.e. new WebSocket(url, header)).
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Check for user ID.
 	userID := userIDFromHeader(r.Header.Get(authHeader))
@@ -39,18 +45,22 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hubName := keys[0]
-	hub, ok := hubs[hubName]
+	currentHub, ok := hubs[hubName]
 	if !ok {
 		var err error
-		hub, err = createOrRetrieveHub(hubName, userID)
+		currentHub, err = hub.CreateOrRetrieveHub(hubName, userID)
 		if err != nil {
 			log.Printf("Error creating hub %s: %v", hubName, err)
 			return
 		}
-		hubs[hubName] = hub
-		go hub.run()
+		hubs[hubName] = currentHub
+		go currentHub.Run()
 	}
-	serveWs(userID, hub, w, r)
+	protocol := r.Header.Get(authHeader)
+	// Generate the "response", which is just the same header that was given in the request.
+	response := http.Header{}
+	response.Add(authHeader, protocol)
+	hub.ServeWs(userID, currentHub, w, r, response)
 }
 
 const optionalPrefix = "Bearer|"
@@ -59,10 +69,10 @@ const optionalPrefix = "Bearer|"
 // it if it exists.
 func userIDFromHeader(header string) string {
 	token := strings.TrimPrefix(header, optionalPrefix)
-	user, err := firebaseAuth.VerifyIDToken(context.Background(), token)
+	userID, err := storage.DB.VerifyIDToken(token)
 	if err != nil {
 		log.Printf("Could not verify token %s:  %+v", token, err)
 		return ""
 	}
-	return user.UID
+	return userID
 }
