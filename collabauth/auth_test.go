@@ -1,6 +1,7 @@
 package collabauth
 
 import (
+	"collabserver/collections"
 	"collabserver/storage"
 	testutils "collabserver/testing"
 	"context"
@@ -23,17 +24,17 @@ func newFirestoreTestClient(ctx context.Context) *firestore.Client {
 func newAuthenticator(client *firestore.Client) *firestoreAuthenticator {
 	// populate the table
 	auth := client.Collection("test_authentication")
-	auth.Doc("owner").Set(context.Background(), AuthEntry{
+	auth.Doc("owner").Set(context.Background(), collections.AuthEntry{
 		UserID: "owner",
 		Role:   Owner,
 	})
 
-	auth.Doc("writer").Set(context.Background(), AuthEntry{
+	auth.Doc("writer").Set(context.Background(), collections.AuthEntry{
 		UserID: "writer",
 		Role:   Writer,
 	})
 
-	auth.Doc("reader").Set(context.Background(), AuthEntry{
+	auth.Doc("reader").Set(context.Background(), collections.AuthEntry{
 		UserID: "reader",
 		Role:   Viewer,
 	})

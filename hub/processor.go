@@ -2,12 +2,15 @@ package hub
 
 import (
 	"collabserver/collabauth"
+	"collabserver/collections"
 	"collabserver/hubcodes"
 	wscodes "collabserver/websocketcodes"
 	"context"
+	"errors"
 	"log"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/api/iterator"
 )
 
 func (h *Hub) processMessage(message *Message) *Message {
@@ -20,8 +23,12 @@ func (h *Hub) processMessage(message *Message) *Message {
 		msg := h.handleFileCreate(message)
 		log.Printf("return message for file create: %#v", msg)
 		return msg
+	case endpointListUsers:
+		return h.handleListUser(message)
 	case endpointModifyUser:
 		return h.handleModifyUser(message)
+	case endpointListFiles:
+		return h.handleListFiles(message)
 	default:
 		log.Printf("Message endpoint: " + message.Endpoint + " is not supported")
 		ret := &Message{
@@ -98,20 +105,19 @@ type fileEntry struct {
 }
 
 func (h *Hub) handleFileCreate(message *Message) *Message {
-	log.Printf("creating file: %s", message.File)
 	// Check if the file exists first, and if it does then return an error so we don't overwrite it.
-	exists, fileRef, err := h.db.DocExists(message.File, h.files)
-	if err != nil {
-		return h.toOriginWithStatus(message, err.Error(), err.Error())
-	}
-	if exists {
+	fileEntry := &collections.FileInfo{}
+	_, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
+	if err != iterator.Done {
+		if err != nil {
+			return h.toOriginWithStatus(message, err.Error(), err.Error())
+		}
 		return h.toOriginWithStatus(message, wscodes.StatusFileExists, "")
 	}
-	// We can reuse the fileRef here because it represents the correct doc ID without needing to explicitly
-	// exist in the collection.
-	_, err = fileRef.Create(context.Background(), fileEntry{
-		name: message.File,
-	})
+	fileEntry = &collections.FileInfo{
+		Name: message.File,
+	}
+	_, err = h.db.AddEntry(h.files, "", fileEntry)
 	if err != nil {
 		return h.toOriginWithStatus(message, wscodes.StatusFileCreateFailed, "")
 	}
@@ -126,7 +132,7 @@ func (h *Hub) handleModifyUser(message *Message) *Message {
 	var err error
 	switch message.ModifyUserType {
 	case userAdd:
-		fallthrough
+		err = h.AddUser(message.ModifyUserID, message.client.userID, collabauth.Viewer)
 	case userModify:
 		err = h.AddUser(message.ModifyUserID, message.client.userID, message.ModifyUserRole)
 	case userRemove:
@@ -149,19 +155,71 @@ func (h *Hub) handleModifyUser(message *Message) *Message {
 	return ret
 }
 
+func (h *Hub) handleListUser(message *Message) *Message {
+	userList, err := h.listUsers(message.client.userID)
+	if err != nil {
+		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+	// TODO(itsazhuhere@): this should really be a different status, because it might be confusing.
+	msg := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	msg.UserList = userList
+	return msg
+}
+
+func (h *Hub) listUsers(requester string) ([]collections.UserInfo, error) {
+	if ok, _ := h.auth.CanRead(requester); !ok {
+		return nil, errUnauthorized
+	}
+
+	return h.allUsers()
+}
+
+func (h *Hub) allUsers() ([]collections.UserInfo, error) {
+	return h.db.AllUsers(h.users)
+}
+
+func (h *Hub) handleListFiles(message *Message) *Message {
+	fileList, err := h.listFiles(message.client.userID)
+	if err != nil {
+		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+	// TODO(itsazhuhere@): this should really be a different status, because it might be confusing.
+	msg := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	msg.FileList = fileList
+	return msg
+}
+
+func (h *Hub) listFiles(requester string) ([]collections.FileInfo, error) {
+	if ok, _ := h.auth.CanRead(requester); !ok {
+		return nil, errUnauthorized
+	}
+	return h.db.AllFiles(h.files)
+}
+
 // AddUser adds a user, after first checking if requester is able to add users.
 // Since a hub requires an owner on init, calling this function should mean at least one owner exists.
 func (h *Hub) AddUser(toAdd, requester, role string) error {
-	ok, docRef := h.auth.CanChangeUsers(requester)
+	ok, _ := h.auth.CanChangeUsers(requester)
 	if !ok {
 		log.Print("User can't change other users")
 		return errUnauthorized
 	}
+	userIDs, err := h.db.UserIDsForEmails([]string{toAdd})
+	if err != nil {
+		return err
+	}
+	var userID string
+	if userID, ok = userIDs[toAdd]; !ok {
+		return errors.New("Email not found")
+	}
+	authEntry := &collections.AuthEntry{}
+	// Currenly just using this for checking for the existence of docRef.
+	docRef, _ := h.db.EntryForFieldValue(h.users, hubcodes.UserIDKey, userID, authEntry)
 	if docRef == nil {
 		// Usually means the user's role hasn't been set for a hub, so we add them to it.
 		var err error
-		docRef, err = h.db.AddEntry(h.users, toAdd, collabauth.AuthEntry{
-			UserID: toAdd,
+		docRef, err = h.db.AddEntry(h.users, "", collections.AuthEntry{
+			UserID: userID,
 			Role:   collabauth.NoRole,
 			Status: hubcodes.UserOffline,
 		})
@@ -173,7 +231,7 @@ func (h *Hub) AddUser(toAdd, requester, role string) error {
 		Path:  collabauth.Role,
 		Value: role,
 	}
-	_, err := docRef.Update(context.Background(), []firestore.Update{update})
+	_, err = docRef.Update(context.Background(), []firestore.Update{update})
 	return err
 }
 

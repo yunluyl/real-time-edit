@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"collabserver/collections"
 	wscodes "collabserver/websocketcodes"
 	"context"
 	"fmt"
@@ -18,6 +19,7 @@ const (
 	firestoreClientName     = "yunlu-test"
 	operationCollectionName = "operations"
 	authCollectionName      = "authorization"
+	usersCollectionName     = "users"
 
 	// Indices are in base 10 (used for converting int to string)
 	intBase = 10
@@ -55,6 +57,7 @@ type OperationEntry struct {
 type collabStorage struct {
 	app    *firebase.App
 	auth   *auth.Client
+	users  *firestore.CollectionRef
 	client *firestore.Client
 }
 
@@ -73,6 +76,8 @@ func (cs *collabStorage) init() {
 	if err != nil {
 		log.Fatalf("initiate Firestore Auth failed: %+v", err)
 	}
+
+	cs.users = cs.client.Collection(usersCollectionName)
 }
 
 func (cs *collabStorage) CollectionForID(collectionID string, docRef *firestore.DocumentRef) *firestore.CollectionRef {
@@ -94,6 +99,22 @@ func (cs *collabStorage) DocExists(docID string, collection *firestore.Collectio
 	}
 	exists := snapshot != nil && snapshot.Exists()
 	return exists, docRef, err
+}
+
+// EntryForFieldValue searches in the collection's fields for the provided value and if found puts the data
+// into the provided struct pointer. It also returns the DocumentRef if it exists.
+func (cs *collabStorage) EntryForFieldValue(collection *firestore.CollectionRef, fieldPath string, value, dataTo interface{}) (*firestore.DocumentRef, error) {
+	iter := collection.
+		Where(fieldPath, "==", value).
+		Documents(context.Background())
+
+	doc, err := iter.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	err = doc.DataTo(dataTo)
+	return doc.Ref, err
 }
 
 func (cs *collabStorage) CollectionIsEmpty(collection *firestore.CollectionRef) bool {
@@ -187,7 +208,13 @@ func opsForFile(opsCollection *firestore.CollectionRef, idx int64,
 }
 
 func (cs *collabStorage) AddEntry(collection *firestore.CollectionRef, id string, data interface{}) (*firestore.DocumentRef, error) {
-	docRef := collection.Doc(id)
+	var docRef *firestore.DocumentRef
+	if id == "" {
+		docRef = collection.NewDoc()
+	} else {
+		docRef = collection.Doc(id)
+	}
+
 	_, err := docRef.Create(context.Background(), data)
 	return docRef, err
 }
@@ -207,4 +234,102 @@ func (cs *collabStorage) VerifyIDToken(idToken string) (string, error) {
 		return "", err
 	}
 	return token.UID, nil
+}
+
+func (cs *collabStorage) allDocs(collection *firestore.CollectionRef) ([]*firestore.DocumentSnapshot, error) {
+	docs, err := collection.Documents(context.Background()).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
+
+func (cs *collabStorage) AllUsers(collection *firestore.CollectionRef) ([]collections.UserInfo, error) {
+	docs, err := cs.allDocs(collection)
+	if err != nil {
+		return nil, err
+	}
+	// Map of user IDs to user info in the hub
+	idToInfo := map[string]collections.UserInfo{}
+	userIDs := []string{}
+	// Iterate over docs and get entries, with some bookkeeping to later get user emails and combine everything
+	// to return to the client
+	for _, doc := range docs {
+		roleEntry := &collections.AuthEntry{}
+		err := doc.DataTo(roleEntry)
+		if err != nil {
+			log.Printf("Error while getting user ID: %s", err.Error())
+			continue
+		}
+		id := roleEntry.UserID
+		idToInfo[id] = collections.UserInfo{
+			Role:   roleEntry.Role,
+			Status: roleEntry.Status,
+		}
+		userIDs = append(userIDs, id)
+	}
+	emails, err := cs.UserEmails(userIDs)
+	if err != nil {
+		return nil, err
+	}
+	userInfos := []collections.UserInfo{}
+	for userID, email := range emails {
+		currEntry := idToInfo[userID]
+		currEntry.Email = email
+		userInfos = append(userInfos, currEntry)
+	}
+
+	return userInfos, nil
+}
+
+func (cs *collabStorage) UserEmails(userIDs []string) (map[string]string, error) {
+	emails := map[string]string{}
+	for _, id := range userIDs {
+		userRecord, err := cs.auth.GetUser(context.Background(), id)
+		if err != nil {
+			log.Printf("error while getting user email: %s", err.Error())
+			continue
+		}
+
+		emails[id] = userRecord.Email
+	}
+
+	return emails, nil
+}
+
+func (cs *collabStorage) UserIDsForEmails(emails []string) (map[string]string, error) {
+	ids := map[string]string{}
+	for _, email := range emails {
+		userRecord, err := cs.auth.GetUserByEmail(context.Background(), email)
+		if err != nil {
+			log.Printf("error while getting user id with email (%s): %s", email, err.Error())
+			continue
+		}
+
+		ids[email] = userRecord.UID
+	}
+
+	return ids, nil
+}
+
+func (cs *collabStorage) AllFiles(collection *firestore.CollectionRef) ([]collections.FileInfo, error) {
+	docs, err := cs.allDocs(collection)
+	if err != nil {
+		return nil, err
+	}
+	fileInfos := []collections.FileInfo{}
+	for _, doc := range docs {
+		if !doc.Exists() {
+			continue
+		}
+		fileInfo := &collections.FileInfo{}
+		err = doc.DataTo(fileInfo)
+		if err != nil {
+			log.Printf("Error while getting file info: %s", err.Error())
+			continue
+		}
+		fileInfos = append(fileInfos, *fileInfo)
+	}
+
+	return fileInfos, nil
 }

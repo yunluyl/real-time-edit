@@ -1,6 +1,7 @@
 package collabauth
 
 import (
+	"collabserver/collections"
 	"collabserver/hubcodes"
 	"collabserver/storage"
 	"context"
@@ -40,14 +41,6 @@ type Authenticator interface {
 	CanDeleteDoc(userID string) (bool, *firestore.DocumentRef)
 	CanRead(userID string) (bool, *firestore.DocumentRef)
 	CanChangeUsers(userID string) (bool, *firestore.DocumentRef)
-}
-
-// AuthEntry represents an entry in the our Firestore authorization collection.
-type AuthEntry struct {
-	UserID string `firestore:"userID"`
-	Role   string `firestore:"role"`
-	// Status is the online status of the user (i.e. "Online" or "Offline").
-	Status string `firestore:"status"`
 }
 
 // datastore declares the functions that are used for interacting with Firestore
@@ -95,7 +88,7 @@ func (fa *firestoreAuthenticator) roleForUserID(userID string) (string, *firesto
 		// Not really an error, just that the user doesn't belong to the hub.
 		return NoRole, nil, nil
 	}
-	data := &AuthEntry{}
+	data := &collections.AuthEntry{}
 	snapshot, err := docRef.Get(context.Background())
 	if err != nil {
 		return NoRole, nil, err
@@ -130,7 +123,7 @@ func AddOwnerToNewHub(ownerID string, collection *firestore.CollectionRef) error
 	if !storage.DB.CollectionIsEmpty(collection) {
 		return errHubNotNew
 	}
-	_, err := storage.DB.AddEntry(collection, ownerID, AuthEntry{
+	_, err := storage.DB.AddEntry(collection, ownerID, collections.AuthEntry{
 		UserID: ownerID,
 		Role:   Owner,
 		Status: hubcodes.UserOffline,
