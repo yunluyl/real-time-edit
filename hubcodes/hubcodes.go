@@ -10,4 +10,13 @@ const (
 
 	// UserStatusKey is the key for the status field of a user in our Firestore users collection
 	UserStatusKey = "status"
+
+	// UserIDKey is the standard key for most user ID columns in our Firestore collections.
+	UserIDKey = "userID"
+
+	// UserEmailKey is the standard key for most email columns in our Firestore collections.
+	UserEmailKey = "email"
+
+	// FileNameKey gives the file's name in the collection.
+	FileNameKey = "name"
 )

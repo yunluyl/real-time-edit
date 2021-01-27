@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"collabserver/collections"
 	testutils "collabserver/testing"
 	"context"
 	"testing"
@@ -27,6 +28,22 @@ func (fd *fakeDatastore) CommitOps(opsCollection *firestore.CollectionRef, idx i
 }
 func (fd *fakeDatastore) CollectionForID(collectionID string, docRef *firestore.DocumentRef) *firestore.CollectionRef {
 	return nil
+}
+
+func (fd *fakeDatastore) AllUsers(collection *firestore.CollectionRef) ([]collections.UserInfo, error) {
+	return nil, nil
+}
+
+func (fd *fakeDatastore) AllFiles(collection *firestore.CollectionRef) ([]collections.FileInfo, error) {
+	return nil, nil
+}
+
+func (fd *fakeDatastore) EntryForFieldValue(collection *firestore.CollectionRef, fieldPath string, value, dataTo interface{}) (*firestore.DocumentRef, error) {
+	return nil, nil
+}
+
+func (fd *fakeDatastore) UserIDsForEmails(emails []string) (map[string]string, error) {
+	return nil, nil
 }
 
 func fakeProcessMessage(message *Message) *Message {

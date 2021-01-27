@@ -1,10 +1,14 @@
 package hub
 
+import "collabserver/collections"
+
 const (
 	endpointPassthrough = "PASSTHROUGH"
 	endpointFileUpdate  = "FILE_UPDATE"
 	endpointFileCreate  = "FILE_CREATE"
 	endpointModifyUser  = "MODIFY_USER"
+	endpointListUsers   = "LIST_USERS"
+	endpointListFiles   = "LIST_FILES"
 
 	routeBroadcast = "BROADCAST"
 	routeOrigin    = "ORIGIN"
@@ -29,6 +33,9 @@ type Message struct {
 	ModifyUserType string `json:"modifyUserType"`
 	ModifyUserRole string `json:"modifyUserRole"`
 	ModifyUserID   string `json:"modifyUserID"`
+
+	UserList []collections.UserInfo `json:"userList"`
+	FileList []collections.FileInfo `json:"fileList"`
 
 	hubName string
 	client  *Client

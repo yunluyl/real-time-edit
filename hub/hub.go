@@ -2,10 +2,12 @@ package hub
 
 import (
 	"collabserver/collabauth"
+	"collabserver/collections"
 	"collabserver/storage"
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
@@ -18,6 +20,8 @@ const (
 	authID  = "authorization"
 	filesID = "files"
 	opsID   = "operations"
+
+	updateInterval = 2
 )
 
 var (
@@ -37,6 +41,10 @@ type datastore interface {
 	UpdateEntry(docRef *firestore.DocumentRef, path string, value interface{}) error
 	CommitOps(opsCollection *firestore.CollectionRef, idx int64, ops []string, committerID string) (string, int64, []string, string)
 	CollectionForID(collectionID string, docRef *firestore.DocumentRef) *firestore.CollectionRef
+	AllUsers(collection *firestore.CollectionRef) ([]collections.UserInfo, error)
+	AllFiles(collection *firestore.CollectionRef) ([]collections.FileInfo, error)
+	UserIDsForEmails(emails []string) (map[string]string, error)
+	EntryForFieldValue(collection *firestore.CollectionRef, fieldPath string, value, dataTo interface{}) (*firestore.DocumentRef, error)
 }
 
 // Hub maintains the set of active clients and send messages to the
@@ -56,6 +64,8 @@ type Hub struct {
 
 	// Unregister requests from clients.
 	unregister chan *Client
+
+	stopPeriodicUpdates chan int
 
 	db datastore
 
@@ -140,6 +150,9 @@ func (h *Hub) init() error {
 	h.auth = collabauth.CurrentAuthenticator(authCollection)
 	h.users = authCollection
 	h.files = fileCollection
+
+	go h.startPeriodicUpdates()
+
 	return nil
 }
 
@@ -174,23 +187,27 @@ func (h *Hub) Run() {
 				return
 			}
 			retMessage := h.processMessage(message)
-			if len(retMessage.Route) > 0 {
-				if retMessage.Route[0] == routeBroadcast {
-					for client := range h.clients {
-						h.sendMessage(client, retMessage)
-					}
-				} else if retMessage.Route[0] == routeOrigin {
-					h.sendMessage(message.client, retMessage)
-				} else {
-					routes := make(map[string]bool)
-					for _, dest := range retMessage.Route {
-						routes[dest] = true
-					}
-					for client := range h.clients {
-						if _, ok := routes[client.userID]; ok {
-							h.sendMessage(client, retMessage)
-						}
-					}
+			h.handleSendMessage(retMessage, message.client)
+		}
+	}
+}
+
+func (h *Hub) handleSendMessage(message *Message, origin *Client) {
+	if len(message.Route) > 0 {
+		if message.Route[0] == routeBroadcast {
+			for client := range h.clients {
+				h.sendMessage(client, message)
+			}
+		} else if message.Route[0] == routeOrigin {
+			h.sendMessage(origin, message)
+		} else {
+			routes := make(map[string]bool)
+			for _, dest := range message.Route {
+				routes[dest] = true
+			}
+			for client := range h.clients {
+				if _, ok := routes[client.userID]; ok {
+					h.sendMessage(client, message)
 				}
 			}
 		}
@@ -198,10 +215,39 @@ func (h *Hub) Run() {
 }
 
 func (h *Hub) sendMessage(client *Client, message *Message) {
+	if client == nil {
+		return
+	}
 	select {
 	case client.send <- message:
 	default:
 		h.closeClient(client)
+	}
+}
+
+func (h *Hub) startPeriodicUpdates() {
+	ticker := time.NewTicker(updateInterval * time.Second)
+	h.stopPeriodicUpdates = make(chan int)
+	for {
+		select {
+		case <-ticker.C:
+			users, err := h.allUsers()
+			if err != nil {
+				log.Printf("Error getting all users of hub %s", h.name)
+				break
+			}
+			message := &Message{
+				Endpoint: endpointListUsers,
+				Route: []string{
+					routeBroadcast,
+				},
+				UserList: users,
+			}
+
+			h.handleSendMessage(message, nil)
+		case <-h.stopPeriodicUpdates:
+			return
+		}
 	}
 }
 
@@ -221,5 +267,6 @@ func (h *Hub) closeHub() {
 	close(h.register)
 	close(h.unregister)
 	close(h.inbound)
+	h.stopPeriodicUpdates <- 0
 	log.Printf("close hub: %s", h.name)
 }
