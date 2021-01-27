@@ -1,4 +1,4 @@
-package main
+package hub
 
 import (
 	"log"
@@ -103,13 +103,10 @@ func (c *Client) writePump() {
 	}
 }
 
-// serveWs handles websocket requests from the peer.
+// ServeWs handles websocket requests from the peer.
 // Since we use the protocol header as a pseudo authorization header, we must return the same
 // header to the client so show that we've "selected" it.
-func serveWs(userID string, hub *Hub, w http.ResponseWriter, r *http.Request) {
-	protocol := r.Header.Get(authHeader)
-	response := http.Header{}
-	response.Add(authHeader, protocol)
+func ServeWs(userID string, hub *Hub, w http.ResponseWriter, r *http.Request, response http.Header) {
 	upgrader.CheckOrigin = func(r *http.Request) bool { return true }
 	conn, err := upgrader.Upgrade(w, r, response)
 	if err != nil {
