@@ -20,9 +20,11 @@ func (h *Hub) processMessage(message *Message) *Message {
 	case endpointFileUpdate:
 		return h.handleFileUpdate(message)
 	case endpointFileCreate:
-		msg := h.handleFileCreate(message)
-		log.Printf("return message for file create: %#v", msg)
-		return msg
+		return h.handleFileCreate(message)
+	case endpointFileRename:
+		return h.handleFileRename(message)
+	case endpointFileDelete:
+		return h.handleFileDelete(message)
 	case endpointListUsers:
 		return h.handleListUser(message)
 	case endpointModifyUser:
@@ -85,6 +87,39 @@ func (h *Hub) handleFileUpdate(message *Message) *Message {
 	return ret
 }
 
+func (h *Hub) handleFileRename(message *Message) *Message {
+	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
+		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+	fileEntry := &collections.FileInfo{}
+
+	// Check if the old file name actually exists.
+	docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
+	if err != nil {
+		if err == iterator.Done {
+			return h.toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
+		}
+		return h.toOriginWithStatus(message, err.Error(), err.Error())
+	}
+
+	// Check if the file we're changing to exists; we don't want it to already exist.
+	_, err = h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.NewFileName, fileEntry)
+	if err != iterator.Done {
+		return h.toOriginWithStatus(message, wscodes.StatusFileExists, "")
+	}
+
+	// Attempt to rename, returning the error or a success depending on the result.
+	err = h.db.UpdateEntry(docRef, hubcodes.FileNameKey, message.NewFileName)
+	if err != nil {
+		return h.toOriginWithStatus(message, wscodes.StatusFileCreateFailed, err.Error())
+	}
+
+	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	returnMessage.File = message.NewFileName
+
+	return returnMessage
+}
+
 func (h *Hub) toOriginWithStatus(message *Message, status string, text string) *Message {
 	return &Message{
 		UID:      message.UID,
@@ -96,15 +131,15 @@ func (h *Hub) toOriginWithStatus(message *Message, status string, text string) *
 }
 
 func (h *Hub) refForFilename(fileName string) (*firestore.CollectionRef, error) {
-	_, fileRef, err := h.db.DocExists(fileName, h.files)
+	fileRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, fileName, &collections.FileInfo{})
 	return h.db.CollectionForID(opsID, fileRef), err
 }
 
-type fileEntry struct {
-	name string `firestore:"name"`
-}
-
 func (h *Hub) handleFileCreate(message *Message) *Message {
+	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
+		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+
 	// Check if the file exists first, and if it does then return an error so we don't overwrite it.
 	fileEntry := &collections.FileInfo{}
 	_, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
@@ -114,16 +149,39 @@ func (h *Hub) handleFileCreate(message *Message) *Message {
 		}
 		return h.toOriginWithStatus(message, wscodes.StatusFileExists, "")
 	}
-	fileEntry = &collections.FileInfo{
-		Name: message.File,
-	}
+	// Proceed with creating the file.
+	fileEntry = &collections.FileInfo{Name: message.File}
 	_, err = h.db.AddEntry(h.files, "", fileEntry)
 	if err != nil {
 		return h.toOriginWithStatus(message, wscodes.StatusFileCreateFailed, "")
 	}
+	// Return success message.
 	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 	returnMessage.File = message.File
-	returnMessage.hubName = message.hubName
+
+	return returnMessage
+}
+
+func (h *Hub) handleFileDelete(message *Message) *Message {
+	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
+		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+
+	// Check if the file exists first before trying to delete
+	fileEntry := &collections.FileInfo{}
+	docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
+	if err != nil {
+		if err == iterator.Done {
+			return h.toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
+		}
+		return h.toOriginWithStatus(message, err.Error(), err.Error())
+	}
+
+	err = h.db.DeleteDocument(docRef)
+	if err != nil {
+		h.toOriginWithStatus(message, err.Error(), err.Error())
+	}
+	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 
 	return returnMessage
 }

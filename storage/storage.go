@@ -23,6 +23,8 @@ const (
 
 	// Indices are in base 10 (used for converting int to string)
 	intBase = 10
+
+	deletedField = "deleted"
 )
 
 var (
@@ -108,12 +110,36 @@ func (cs *collabStorage) EntryForFieldValue(collection *firestore.CollectionRef,
 		Where(fieldPath, "==", value).
 		Documents(context.Background())
 
-	doc, err := iter.Next()
-	if err != nil {
-		return nil, err
+	// If the "deleted" field exists and is true, move on to the next one.
+	var doc *firestore.DocumentSnapshot
+	for {
+		var err error
+		doc, err = iter.Next()
+		if err != nil {
+			return nil, err
+		}
+		log.Print("checking fields")
+		fields := map[string]interface{}{}
+		log.Print("datato")
+		err = doc.DataTo(&fields)
+		if err != nil {
+			continue
+		}
+		log.Printf("checking fields: %#v", fields)
+		if deleted, ok := fields[deletedField]; ok {
+			log.Print("deleted access success")
+			if deleted.(bool) {
+				log.Print("deleted is true")
+				continue
+			}
+			// At this point all scenarios result in us returning the current doc.
+		}
+		log.Print("deleted is false or nonexistent")
+		break
 	}
 
-	err = doc.DataTo(dataTo)
+	err := doc.DataTo(dataTo)
+	log.Print("returning docref")
 	return doc.Ref, err
 }
 
@@ -228,6 +254,11 @@ func (cs *collabStorage) UpdateEntry(docRef *firestore.DocumentRef, path string,
 	return err
 }
 
+// DeleteDocument marks the document as deleted by adding a field to it indicating so.
+func (cs *collabStorage) DeleteDocument(docRef *firestore.DocumentRef) error {
+	return cs.UpdateEntry(docRef, deletedField, true)
+}
+
 func (cs *collabStorage) VerifyIDToken(idToken string) (string, error) {
 	token, err := cs.auth.VerifyIDToken(context.Background(), idToken)
 	if err != nil {
@@ -326,6 +357,9 @@ func (cs *collabStorage) AllFiles(collection *firestore.CollectionRef) ([]collec
 		err = doc.DataTo(fileInfo)
 		if err != nil {
 			log.Printf("Error while getting file info: %s", err.Error())
+			continue
+		}
+		if fileInfo.Deleted {
 			continue
 		}
 		fileInfos = append(fileInfos, *fileInfo)
