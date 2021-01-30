@@ -46,6 +46,10 @@ func (fd *fakeDatastore) UserIDsForEmails(emails []string) (map[string]string, e
 	return nil, nil
 }
 
+func (fd *fakeDatastore) DeleteDocument(docRef *firestore.DocumentRef) error {
+	return nil
+}
+
 func fakeProcessMessage(message *Message) *Message {
 	return message
 }
