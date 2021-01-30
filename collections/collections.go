@@ -28,5 +28,6 @@ type UserInfo struct {
 
 // FileInfo contains info on a file within a hub. Only has the file name for now.
 type FileInfo struct {
-	Name string `json:"name"`
+	Name    string `json:"name" firestore:"name"`
+	Deleted bool   `firestore:"deleted"`
 }

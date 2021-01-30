@@ -40,6 +40,7 @@ type datastore interface {
 	DocExists(docID string, collection *firestore.CollectionRef) (bool, *firestore.DocumentRef, error)
 	UpdateEntry(docRef *firestore.DocumentRef, path string, value interface{}) error
 	CommitOps(opsCollection *firestore.CollectionRef, idx int64, ops []string, committerID string) (string, int64, []string, string)
+	DeleteDocument(docRef *firestore.DocumentRef) error
 	CollectionForID(collectionID string, docRef *firestore.DocumentRef) *firestore.CollectionRef
 	AllUsers(collection *firestore.CollectionRef) ([]collections.UserInfo, error)
 	AllFiles(collection *firestore.CollectionRef) ([]collections.FileInfo, error)
@@ -52,6 +53,9 @@ type datastore interface {
 type Hub struct {
 	// Name of this hub
 	name string
+
+	// set to true if hub has been closed; can't be reused and needs to be disposed of.
+	isClosed bool
 
 	// Registered clients.
 	clients map[*Client]bool
@@ -111,6 +115,7 @@ func newHub(hubName, userID string, hubs *firestore.CollectionRef) (*Hub, error)
 	}
 	hub := &Hub{
 		name:       hubName,
+		isClosed:   false,
 		inbound:    make(chan *Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -172,7 +177,6 @@ func (h *Hub) Run() {
 				break
 			}
 			h.clients[client] = true
-			// TODO(andrezhu@): push message of hub file list
 		case client, ok := <-h.unregister:
 			if !ok {
 				return
@@ -251,6 +255,12 @@ func (h *Hub) startPeriodicUpdates() {
 	}
 }
 
+// IsClosed determines if a hub has been closed or not. Useful for maintaining a list of hubs
+// that may or may not need to be closed as needed.
+func (h *Hub) IsClosed() bool {
+	return h.isClosed
+}
+
 func (h *Hub) closeClient(client *Client) {
 	log.Printf("closing client: %+v", client)
 	close(client.send)
@@ -268,5 +278,6 @@ func (h *Hub) closeHub() {
 	close(h.unregister)
 	close(h.inbound)
 	h.stopPeriodicUpdates <- 0
+	h.isClosed = true
 	log.Printf("close hub: %s", h.name)
 }

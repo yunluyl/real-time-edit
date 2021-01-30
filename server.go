@@ -46,7 +46,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	hubName := keys[0]
 	currentHub, ok := hubs[hubName]
-	if !ok {
+	if !ok || currentHub.IsClosed() {
 		var err error
 		currentHub, err = hub.CreateOrRetrieveHub(hubName, userID)
 		if err != nil {
