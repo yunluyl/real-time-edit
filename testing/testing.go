@@ -2,7 +2,8 @@ package testing
 
 import (
 	"context"
-	"log"
+
+	log "collabserver/cloudlog"
 
 	"cloud.google.com/go/firestore"
 )

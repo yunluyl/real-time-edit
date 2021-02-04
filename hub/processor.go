@@ -1,13 +1,13 @@
 package hub
 
 import (
+	log "collabserver/cloudlog"
 	"collabserver/collabauth"
 	"collabserver/collections"
 	"collabserver/hubcodes"
 	wscodes "collabserver/websocketcodes"
 	"context"
 	"errors"
-	"log"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
@@ -31,6 +31,9 @@ func (h *Hub) processMessage(message *Message) *Message {
 		return h.handleModifyUser(message)
 	case endpointListFiles:
 		return h.handleListFiles(message)
+	case endpointDisconnectFromHub:
+		go h.handBackClient(message.client)
+		return nil
 	default:
 		log.Printf("Message endpoint: " + message.Endpoint + " is not supported")
 		ret := &Message{
@@ -48,7 +51,7 @@ func (h *Hub) handleFileUpdate(message *Message) *Message {
 		UID:      message.UID,
 		Endpoint: message.Endpoint,
 		File:     message.File,
-		hubName:  message.hubName,
+		HubName:  message.HubName,
 	}
 	var status string
 	var idx int64
@@ -89,7 +92,7 @@ func (h *Hub) handleFileUpdate(message *Message) *Message {
 
 func (h *Hub) handleFileRename(message *Message) *Message {
 	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
-		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
 	}
 	fileEntry := &collections.FileInfo{}
 
@@ -97,37 +100,27 @@ func (h *Hub) handleFileRename(message *Message) *Message {
 	docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
 	if err != nil {
 		if err == iterator.Done {
-			return h.toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
+			return toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
 		}
-		return h.toOriginWithStatus(message, err.Error(), err.Error())
+		return toOriginWithStatus(message, err.Error(), err.Error())
 	}
 
 	// Check if the file we're changing to exists; we don't want it to already exist.
 	_, err = h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.NewFileName, fileEntry)
 	if err != iterator.Done {
-		return h.toOriginWithStatus(message, wscodes.StatusFileExists, "")
+		return toOriginWithStatus(message, wscodes.StatusFileExists, "")
 	}
 
 	// Attempt to rename, returning the error or a success depending on the result.
 	err = h.db.UpdateEntry(docRef, hubcodes.FileNameKey, message.NewFileName)
 	if err != nil {
-		return h.toOriginWithStatus(message, wscodes.StatusFileCreateFailed, err.Error())
+		return toOriginWithStatus(message, wscodes.StatusFileCreateFailed, err.Error())
 	}
 
-	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	returnMessage := toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 	returnMessage.File = message.NewFileName
 
 	return returnMessage
-}
-
-func (h *Hub) toOriginWithStatus(message *Message, status string, text string) *Message {
-	return &Message{
-		UID:      message.UID,
-		Status:   status,
-		Text:     text,
-		Endpoint: message.Endpoint,
-		Route:    append([]string{}, routeOrigin),
-	}
 }
 
 func (h *Hub) refForFilename(fileName string) (*firestore.CollectionRef, error) {
@@ -137,7 +130,7 @@ func (h *Hub) refForFilename(fileName string) (*firestore.CollectionRef, error) 
 
 func (h *Hub) handleFileCreate(message *Message) *Message {
 	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
-		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
 	}
 
 	// Check if the file exists first, and if it does then return an error so we don't overwrite it.
@@ -145,18 +138,18 @@ func (h *Hub) handleFileCreate(message *Message) *Message {
 	_, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
 	if err != iterator.Done {
 		if err != nil {
-			return h.toOriginWithStatus(message, err.Error(), err.Error())
+			return toOriginWithStatus(message, err.Error(), err.Error())
 		}
-		return h.toOriginWithStatus(message, wscodes.StatusFileExists, "")
+		return toOriginWithStatus(message, wscodes.StatusFileExists, "")
 	}
 	// Proceed with creating the file.
 	fileEntry = &collections.FileInfo{Name: message.File}
 	_, err = h.db.AddEntry(h.files, "", fileEntry)
 	if err != nil {
-		return h.toOriginWithStatus(message, wscodes.StatusFileCreateFailed, "")
+		return toOriginWithStatus(message, wscodes.StatusFileCreateFailed, "")
 	}
 	// Return success message.
-	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	returnMessage := toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 	returnMessage.File = message.File
 
 	return returnMessage
@@ -164,7 +157,7 @@ func (h *Hub) handleFileCreate(message *Message) *Message {
 
 func (h *Hub) handleFileDelete(message *Message) *Message {
 	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
-		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
 	}
 
 	// Check if the file exists first before trying to delete
@@ -172,16 +165,16 @@ func (h *Hub) handleFileDelete(message *Message) *Message {
 	docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, fileEntry)
 	if err != nil {
 		if err == iterator.Done {
-			return h.toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
+			return toOriginWithStatus(message, wscodes.StatusFileDoesntExist, "")
 		}
-		return h.toOriginWithStatus(message, err.Error(), err.Error())
+		return toOriginWithStatus(message, err.Error(), err.Error())
 	}
 
 	err = h.db.DeleteDocument(docRef)
 	if err != nil {
-		h.toOriginWithStatus(message, err.Error(), err.Error())
+		toOriginWithStatus(message, err.Error(), err.Error())
 	}
-	returnMessage := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	returnMessage := toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 
 	return returnMessage
 }
@@ -200,7 +193,7 @@ func (h *Hub) handleModifyUser(message *Message) *Message {
 		UID:      message.UID,
 		Endpoint: message.Endpoint,
 		File:     message.File,
-		hubName:  message.hubName,
+		HubName:  message.HubName,
 	}
 
 	if err != nil {
@@ -216,10 +209,10 @@ func (h *Hub) handleModifyUser(message *Message) *Message {
 func (h *Hub) handleListUser(message *Message) *Message {
 	userList, err := h.listUsers(message.client.userID)
 	if err != nil {
-		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
 	}
 	// TODO(itsazhuhere@): this should really be a different status, because it might be confusing.
-	msg := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	msg := toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 	msg.UserList = userList
 	return msg
 }
@@ -239,10 +232,10 @@ func (h *Hub) allUsers() ([]collections.UserInfo, error) {
 func (h *Hub) handleListFiles(message *Message) *Message {
 	fileList, err := h.listFiles(message.client.userID)
 	if err != nil {
-		return h.toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
 	}
 	// TODO(itsazhuhere@): this should really be a different status, because it might be confusing.
-	msg := h.toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
+	msg := toOriginWithStatus(message, wscodes.StatusOperationCommitted, "")
 	msg.FileList = fileList
 	return msg
 }
@@ -290,6 +283,12 @@ func (h *Hub) AddUser(toAdd, requester, role string) error {
 		Value: role,
 	}
 	_, err = docRef.Update(context.Background(), []firestore.Update{update})
+	if err != nil {
+		return err
+	}
+	// Also update their entry in the user to hubs collection
+	h.db.UpdateUsersHubList(userID, h.name, role)
+
 	return err
 }
 
@@ -315,4 +314,24 @@ func (h *Hub) DisconnectUser(userID string) error {
 	}
 	err = h.db.UpdateEntry(docRef, hubcodes.UserStatusKey, hubcodes.UserOnline)
 	return err
+}
+
+func (h *Hub) hubConnectSuccessMessage(client *Client) *Message {
+	return &Message{
+		Status:   wscodes.StatusSuccess,
+		Endpoint: endpointConnectToHub,
+		Route:    append([]string{}, routeOrigin),
+		client:   client,
+		HubName:  h.name,
+	}
+}
+
+func toOriginWithStatus(message *Message, status string, text string) *Message {
+	return &Message{
+		UID:      message.UID,
+		Status:   status,
+		Text:     text,
+		Endpoint: message.Endpoint,
+		Route:    append([]string{}, routeOrigin),
+	}
 }

@@ -1,25 +1,24 @@
 package hub
 
 import (
+	log "collabserver/cloudlog"
 	"collabserver/collabauth"
 	"collabserver/collections"
 	"collabserver/storage"
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const (
 	// The ids for relevant collections/subcollections in Firestore.
-	hubsID  = "hubs"
-	authID  = "authorization"
-	filesID = "files"
-	opsID   = "operations"
+	hubsID        = "hubs"
+	authID        = "authorization"
+	filesID       = "files"
+	opsID         = "operations"
+	usersToHubsID = "usersToHubs"
 
 	updateInterval = 2
 )
@@ -46,6 +45,8 @@ type datastore interface {
 	AllFiles(collection *firestore.CollectionRef) ([]collections.FileInfo, error)
 	UserIDsForEmails(emails []string) (map[string]string, error)
 	EntryForFieldValue(collection *firestore.CollectionRef, fieldPath string, value, dataTo interface{}) (*firestore.DocumentRef, error)
+	AllHubsForUser(userID string) []string
+	UpdateUsersHubList(userID, hubName, role string) error
 }
 
 // Hub maintains the set of active clients and send messages to the
@@ -69,6 +70,10 @@ type Hub struct {
 	// Unregister requests from clients.
 	unregister chan *Client
 
+	clientReturn map[*Client]chan *Client
+
+	stopClientSend map[*Client]chan struct{}
+
 	stopPeriodicUpdates chan int
 
 	db datastore
@@ -80,6 +85,8 @@ type Hub struct {
 	users *firestore.CollectionRef
 
 	files *firestore.CollectionRef
+
+	masterUsersList *firestore.CollectionRef
 }
 
 // hubRef defines what a hub entry looks like in the hubs collection.
@@ -90,8 +97,10 @@ type hubRef struct {
 // CreateOrRetrieveHub attempts to fetch the hub from the db, and creates a new one
 // if it doesn't exist, with userID as the owner.
 func CreateOrRetrieveHub(hubName string, userID string) (*Hub, error) {
+	log.Printf("getting hub %s ", hubName)
 	hubs := storage.DB.CollectionForID(hubsID, nil)
 	if hubs == nil {
+		log.Print("not found")
 		return nil, ErrorCollectionNotFound
 	}
 	return newHub(hubName, userID, hubs)
@@ -102,8 +111,8 @@ func CreateOrRetrieveHub(hubName string, userID string) (*Hub, error) {
 func newHub(hubName, userID string, hubs *firestore.CollectionRef) (*Hub, error) {
 	exists, docRef, err := storage.DB.DocExists(hubName, hubs)
 	if !exists {
-		if status.Code(err) != codes.NotFound {
-			// Some unknown, unhandled error
+		if err != nil {
+			// Some unknown, unhandled error; DocExists silences the NotFound error.
 			return nil, err
 		}
 		// At this point Create should work (or at least not fail due to Doc already existing),
@@ -114,14 +123,16 @@ func newHub(hubName, userID string, hubs *firestore.CollectionRef) (*Hub, error)
 		}
 	}
 	hub := &Hub{
-		name:       hubName,
-		isClosed:   false,
-		inbound:    make(chan *Message),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		clients:    make(map[*Client]bool),
-		ref:        docRef,
-		db:         storage.DB,
+		name:            hubName,
+		isClosed:        false,
+		inbound:         make(chan *Message),
+		register:        make(chan *Client),
+		unregister:      make(chan *Client),
+		clients:         make(map[*Client]bool),
+		stopClientSend:  make(map[*Client]chan struct{}),
+		ref:             docRef,
+		db:              storage.DB,
+		masterUsersList: storage.DB.TopLevelCollection(usersToHubsID),
 	}
 	err = hub.init()
 	if err != nil {
@@ -136,6 +147,15 @@ func createHubWithOwner(docRef *firestore.DocumentRef, hubName, ownerID string) 
 		return err
 	}
 	err = collabauth.AddOwnerToNewHub(ownerID, docRef.Collection(authID))
+
+	// Also add them to a collection that allows easy lookup of the hubs a user is a part of.
+	masterUsersList := storage.DB.TopLevelCollection(usersToHubsID)
+	storage.DB.AddEntry(masterUsersList, "", collections.UserToHubEntry{
+		UserID: ownerID,
+		Hub:    hubName,
+		Role:   collabauth.Owner,
+	})
+
 	return err
 }
 
@@ -156,6 +176,8 @@ func (h *Hub) init() error {
 	h.users = authCollection
 	h.files = fileCollection
 
+	h.clientReturn = make(map[*Client]chan *Client)
+
 	go h.startPeriodicUpdates()
 
 	return nil
@@ -170,6 +192,9 @@ func (h *Hub) Run() {
 			if !ok {
 				return
 			}
+
+			h.stopClientSend[client] = make(chan struct{})
+			client.assignChans(h.inbound, h.stopClientSend[client])
 			// The minimum permissions for hub access is read access.
 			if err := h.ConnectUser(client.userID); err != nil {
 				log.Printf("User %s does not have permission to access hub %s: %v", client.userID, h.name, err)
@@ -177,13 +202,17 @@ func (h *Hub) Run() {
 				break
 			}
 			h.clients[client] = true
+			h.sendMessage(client, h.hubConnectSuccessMessage(client))
 		case client, ok := <-h.unregister:
 			if !ok {
 				return
 			}
+			log.Print("returning client to connector")
 			if _, ok := h.clients[client]; ok {
 				h.DisconnectUser(client.userID)
-				h.closeClient(client)
+				h.clientReturn[client] <- client
+				delete(h.clientReturn, client)
+				h.removeClient(client)
 			}
 		case message, ok := <-h.inbound:
 			// Auth check is in processMessage.
@@ -196,7 +225,21 @@ func (h *Hub) Run() {
 	}
 }
 
+func (h *Hub) registerUser(client *Client, returnClient chan *Client) {
+	if h.IsClosed() {
+		log.Print("register client failed because hub is closed")
+		return
+	}
+	log.Printf("registering client: %#v to hub: %#v", client, h)
+	h.clientReturn[client] = returnClient
+	h.register <- client
+}
+
 func (h *Hub) handleSendMessage(message *Message, origin *Client) {
+	if message == nil {
+		// No op
+		return
+	}
 	if len(message.Route) > 0 {
 		if message.Route[0] == routeBroadcast {
 			for client := range h.clients {
@@ -220,6 +263,10 @@ func (h *Hub) handleSendMessage(message *Message, origin *Client) {
 
 func (h *Hub) sendMessage(client *Client, message *Message) {
 	if client == nil {
+		return
+	}
+	if client.IsClosed() {
+		h.closeClient(client)
 		return
 	}
 	select {
@@ -261,9 +308,18 @@ func (h *Hub) IsClosed() bool {
 	return h.isClosed
 }
 
+// hands the client back to the hub connector.
+func (h *Hub) handBackClient(client *Client) {
+	h.unregister <- client
+}
+
 func (h *Hub) closeClient(client *Client) {
-	log.Printf("closing client: %+v", client)
-	close(client.send)
+	h.removeClient(client)
+}
+
+func (h *Hub) removeClient(client *Client) {
+	close(h.stopClientSend[client])
+	delete(h.stopClientSend, client)
 	delete(h.clients, client)
 	if len(h.clients) == 0 {
 		h.closeHub()
@@ -277,7 +333,11 @@ func (h *Hub) closeHub() {
 	close(h.register)
 	close(h.unregister)
 	close(h.inbound)
-	h.stopPeriodicUpdates <- 0
+	go func() {
+		// This can hang depending on where in the call stack closeHub is called.
+		// Doing this in a goroutine means functions can resolve and avoid the hang.
+		h.stopPeriodicUpdates <- 0
+	}()
 	h.isClosed = true
 	log.Printf("close hub: %s", h.name)
 }

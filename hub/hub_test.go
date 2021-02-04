@@ -50,6 +50,14 @@ func (fd *fakeDatastore) DeleteDocument(docRef *firestore.DocumentRef) error {
 	return nil
 }
 
+func (fd *fakeDatastore) AllHubsForUser(userID string) []string {
+	return nil
+}
+
+func (fd *fakeDatastore) UpdateUsersHubList(userID, hubName, role string) error {
+	return nil
+}
+
 func fakeProcessMessage(message *Message) *Message {
 	return message
 }

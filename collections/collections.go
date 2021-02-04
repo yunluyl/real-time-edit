@@ -31,3 +31,11 @@ type FileInfo struct {
 	Name    string `json:"name" firestore:"name"`
 	Deleted bool   `firestore:"deleted"`
 }
+
+// UserToHubEntry lists the fields of a document in the userToHub collection, which allows easy
+// lookup of users' hub memberships.
+type UserToHubEntry struct {
+	UserID string `firestore:"userID"`
+	Hub    string `firestore:"hub"`
+	Role   string `firestore:"role"`
+}

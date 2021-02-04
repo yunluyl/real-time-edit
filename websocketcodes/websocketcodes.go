@@ -4,6 +4,12 @@ const (
 	// StatusOperationCommitted is given when the commit to db is successful.
 	StatusOperationCommitted = "OP_COMMITTED"
 
+	// StatusSuccess is a generic success message given when no errors occurred while handling the request.
+	StatusSuccess = "SUCCESS"
+
+	// StatusFailure is a generic failure message given when some error occurred while handling the request.
+	StatusFailure = "FAILURE"
+
 	// StatusOperationCommitError is given when the commit to db fails.
 	StatusOperationCommitError = "OP_COMMIT_ERR"
 
@@ -28,4 +34,7 @@ const (
 
 	// StatusFileCreateFailed is given when the file creation failed for some reason.
 	StatusFileCreateFailed = "CREATE_FILE_FAILED"
+
+	// StatusNotConnectedToHub is given when the user attempts to perform a hub action while not connected to a hub.
+	StatusNotConnectedToHub = "NOT_CONNECTED_TO_HUB"
 )

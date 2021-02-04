@@ -3,14 +3,18 @@ package hub
 import "collabserver/collections"
 
 const (
-	endpointPassthrough = "PASSTHROUGH"
-	endpointFileUpdate  = "FILE_UPDATE"
-	endpointFileCreate  = "FILE_CREATE"
-	endpointFileRename  = "FILE_RENAME"
-	endpointFileDelete  = "FILE_DELETE"
-	endpointModifyUser  = "MODIFY_USER"
-	endpointListUsers   = "LIST_USERS"
-	endpointListFiles   = "LIST_FILES"
+	endpointPassthrough       = "PASSTHROUGH"
+	endpointFileUpdate        = "FILE_UPDATE"
+	endpointFileCreate        = "FILE_CREATE"
+	endpointFileRename        = "FILE_RENAME"
+	endpointFileDelete        = "FILE_DELETE"
+	endpointModifyUser        = "MODIFY_USER"
+	endpointListUsers         = "LIST_USERS"
+	endpointListFiles         = "LIST_FILES"
+	endpointListHub           = "LIST_HUB"
+	endpointConnectToHub      = "CONNECT_HUB"
+	endpointDisconnectFromHub = "DISCONNECT_HUB"
+	endpointHubCreate         = "HUB_CREATE"
 
 	routeBroadcast = "BROADCAST"
 	routeOrigin    = "ORIGIN"
@@ -40,7 +44,8 @@ type Message struct {
 
 	UserList []collections.UserInfo `json:"userList"`
 	FileList []collections.FileInfo `json:"fileList"`
+	HubList  []string               `json:"hubList"`
 
-	hubName string
+	HubName string `json:"hubName"`
 	client  *Client
 }

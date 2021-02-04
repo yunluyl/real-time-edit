@@ -1,11 +1,11 @@
 package storage
 
 import (
+	log "collabserver/cloudlog"
 	"collabserver/collections"
 	wscodes "collabserver/websocketcodes"
 	"context"
 	"fmt"
-	"log"
 
 	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
@@ -19,12 +19,16 @@ const (
 	firestoreClientName     = "yunlu-test"
 	operationCollectionName = "operations"
 	authCollectionName      = "authorization"
-	usersCollectionName     = "users"
+	usersCollectionName     = "usersToHubs"
 
 	// Indices are in base 10 (used for converting int to string)
 	intBase = 10
 
-	deletedField = "deleted"
+	deletedField  = "deleted"
+	hubUsersField = "users"
+	userIDField   = "userID"
+	roleField     = "role"
+	hubPath       = "hub"
 )
 
 var (
@@ -118,34 +122,31 @@ func (cs *collabStorage) EntryForFieldValue(collection *firestore.CollectionRef,
 		if err != nil {
 			return nil, err
 		}
-		log.Print("checking fields")
 		fields := map[string]interface{}{}
-		log.Print("datato")
 		err = doc.DataTo(&fields)
 		if err != nil {
 			continue
 		}
-		log.Printf("checking fields: %#v", fields)
 		if deleted, ok := fields[deletedField]; ok {
-			log.Print("deleted access success")
 			if deleted.(bool) {
-				log.Print("deleted is true")
 				continue
 			}
 			// At this point all scenarios result in us returning the current doc.
 		}
-		log.Print("deleted is false or nonexistent")
 		break
 	}
 
 	err := doc.DataTo(dataTo)
-	log.Print("returning docref")
 	return doc.Ref, err
 }
 
 func (cs *collabStorage) CollectionIsEmpty(collection *firestore.CollectionRef) bool {
 	allDocs, _ := collection.Documents(context.Background()).GetAll()
 	return len(allDocs) == 0
+}
+
+func (cs *collabStorage) TopLevelCollection(collection string) *firestore.CollectionRef {
+	return cs.client.Collection(collection)
 }
 
 // CommitOps checks that the OT operations can be committed then pushes them to the collection.
@@ -366,4 +367,59 @@ func (cs *collabStorage) AllFiles(collection *firestore.CollectionRef) ([]collec
 	}
 
 	return fileInfos, nil
+}
+
+func (cs *collabStorage) AllHubsForUser(userID string) []string {
+	docs := cs.users.Query.
+		Where(userIDField, "==", userID).
+		Where(roleField, "!=", "NONE"). // TODO (itsazhuhere@): move to a common package.
+		Documents(context.Background())
+	docIDs := []string{}
+	for {
+		doc, err := docs.Next()
+		if err == iterator.Done {
+			break
+		} else if err != nil {
+			log.Printf("error getting hub in AllHubsForUser: %s", err.Error())
+			continue
+		}
+		data, err := doc.DataAt(hubPath)
+		if err != nil {
+			log.Printf("error getting hub in AllHubsForUser: %s", err.Error())
+			continue
+		}
+		if hubName, ok := data.(string); ok {
+			docIDs = append(docIDs, hubName)
+		} else {
+			log.Printf("field hub is not a string for user %s", userID)
+		}
+	}
+
+	return docIDs
+}
+
+func (cs *collabStorage) UpdateUsersHubList(userID, hubName, role string) error {
+	docs := cs.users.Query.
+		Where(userIDField, "==", userID).
+		Where(hubPath, "==", hubName).
+		Documents(context.Background())
+	var docRef *firestore.DocumentRef
+	doc, err := docs.Next()
+	if err != nil {
+		if err != iterator.Done {
+			return err
+		}
+		// Entry doesn't exist so we create it.
+		docRef, err = cs.AddEntry(cs.users, "", collections.UserToHubEntry{
+			UserID: userID,
+			Hub:    hubName,
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		docRef = doc.Ref
+	}
+
+	return cs.UpdateEntry(docRef, roleField, role)
 }

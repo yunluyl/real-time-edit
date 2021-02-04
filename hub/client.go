@@ -1,8 +1,10 @@
 package hub
 
 import (
-	"log"
-	"net/http"
+	log "collabserver/cloudlog"
+	"errors"
+	"fmt"
+
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,6 +24,11 @@ const (
 	maxMessageSize = 9223372036854775807
 )
 
+var (
+	errNoHub         = errors.New("client is not connected to a hub")
+	errNoBackendChan = errors.New("client does not have a backend channel assigned")
+)
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -31,13 +38,24 @@ var upgrader = websocket.Upgrader{
 type Client struct {
 	userID string
 
-	hub *Hub
+	unregister chan *Client
+
+	toBackend chan *Message
 
 	// The websocket connection.
 	conn *websocket.Conn
 
 	// Buffered channel of outbound messages.
 	send chan *Message
+
+	stopCh chan struct{}
+
+	closed bool
+}
+
+// IsClosed returns true if the client is closed and shouldn't be interacted with anymore.
+func (c *Client) IsClosed() bool {
+	return c.closed
 }
 
 // readPump pumps messages from the websocket connection to the hub.
@@ -47,8 +65,9 @@ type Client struct {
 // reads from this goroutine.
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		c.Unregister()
 		c.conn.Close()
+		c.closed = true
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -63,9 +82,11 @@ func (c *Client) readPump() {
 			}
 			break
 		}
-		message.hubName = c.hub.name
 		message.client = c
-		c.hub.inbound <- &message
+		err = c.clientToBackend(&message)
+		if err != nil {
+			log.Printf("error sending %#v to backend: %s", message, err.Error())
+		}
 	}
 }
 
@@ -79,6 +100,7 @@ func (c *Client) writePump() {
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
+		c.closed = true
 	}()
 	for {
 		select {
@@ -103,22 +125,60 @@ func (c *Client) writePump() {
 	}
 }
 
-// ServeWs handles websocket requests from the peer.
-// Since we use the protocol header as a pseudo authorization header, we must return the same
-// header to the client so show that we've "selected" it.
-func ServeWs(userID string, hub *Hub, w http.ResponseWriter, r *http.Request, response http.Header) {
-	upgrader.CheckOrigin = func(r *http.Request) bool { return true }
-	conn, err := upgrader.Upgrade(w, r, response)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	client := &Client{userID: userID, hub: hub, conn: conn, send: make(chan *Message, 256)}
-	log.Printf("client: %#v", client)
-	client.hub.register <- client
-
+// Start begins the read and write goroutines for hub <-> client communication.
+func (c *Client) Start() {
 	// Allow collection of memory referenced by the caller by doing all work in
 	// new goroutines.
-	go client.writePump()
-	go client.readPump()
+	go c.writePump()
+	go c.readPump()
+}
+
+// Unregister removes the client from the current hub.
+func (c *Client) Unregister() error {
+	if c.unregister == nil {
+		return errNoHub
+	}
+
+	select {
+	case <-c.stopCh:
+		return fmt.Errorf("client receieved stop send request")
+	default:
+	}
+	select {
+	case <-c.stopCh:
+		return fmt.Errorf("client receieved stop send request")
+	case c.unregister <- c:
+	}
+
+	return nil
+}
+
+// Assign the channels that the Client will need to use for communication with a hub.
+func (c *Client) assignChans(backendChan chan *Message, stopCh chan struct{}) {
+	c.toBackend = backendChan
+	c.stopCh = stopCh
+}
+
+func (c *Client) clientToBackend(message *Message) error {
+	if c.toBackend == nil {
+		return errNoBackendChan
+	}
+	select {
+	case <-c.stopCh:
+		return fmt.Errorf("client receieved stop send request")
+	default:
+	}
+	select {
+	case <-c.stopCh:
+		return fmt.Errorf("client receieved stop send request")
+	case c.toBackend <- message:
+	}
+
+	return nil
+}
+
+// NewClient returns a newly instantiated client. Hub is not assigned and will need to be in order to
+// perform hub related actions.
+func NewClient(userID string, conn *websocket.Conn) *Client {
+	return &Client{userID: userID, conn: conn, send: make(chan *Message, 256)}
 }

@@ -1,11 +1,11 @@
 package collabauth
 
 import (
+	log "collabserver/cloudlog"
 	"collabserver/collections"
 	"collabserver/storage"
 	testutils "collabserver/testing"
 	"context"
-	"log"
 	"testing"
 
 	"cloud.google.com/go/firestore"
