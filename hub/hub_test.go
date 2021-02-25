@@ -58,6 +58,10 @@ func (fd *fakeDatastore) UpdateUsersHubList(userID, hubName, role string) error 
 	return nil
 }
 
+func (fd *fakeDatastore) OpsForFile(opsCollection *firestore.CollectionRef, idx int64) ([]string, int64, error) {
+	return nil, 0, nil
+}
+
 func fakeProcessMessage(message *Message) *Message {
 	return message
 }

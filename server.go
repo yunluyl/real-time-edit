@@ -25,7 +25,7 @@ func main() {
 
 	hubConnector = hub.NewConnector()
 
-	addr := ":80"
+	addr := ":8089"
 	log.Println("Starting server at: http://" + addr)
 	log.Fatal(http.ListenAndServe(addr, router))
 }

@@ -19,4 +19,7 @@ const (
 
 	// FileNameKey gives the file's name in the collection.
 	FileNameKey = "name"
+
+	// The key for the flag that indicates that a file needs updating to the latest state.
+	FileUpdateKey = "snapshotNeedsUpdate"
 )

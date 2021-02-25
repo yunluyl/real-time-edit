@@ -14,12 +14,14 @@ const (
 	maxCodeGenerationAttempts = 10
 )
 
-// Connector facilitates connecting users to a hub.
+// Connector facilitates connecting users to a hub and also keeps track of which hubs
+// are instantiated in the backend.
 type Connector struct {
 	hubs map[string]*Hub
 
 	db datastore
 
+	// Used to receive clients back from hubs.
 	clientQueue chan *Client
 }
 
@@ -85,12 +87,11 @@ func (hc *Connector) ServeWs(userID string, w http.ResponseWriter, r *http.Reque
 	go hc.respondUntilHandoff(client)
 }
 
-// Responds to client messages (currently only supporting hub list requests) until the client connects to a hub.
+// Responds to client messages (currently only supporting hub list and connect requests) until the client connects to a hub.
 func (hc *Connector) respondUntilHandoff(client *Client) {
 	tempMessageReceiver := make(chan *Message)
 	stopClientSend := make(chan struct{})
 	defer func() {
-		close(tempMessageReceiver)
 		close(stopClientSend)
 	}()
 	client.assignChans(tempMessageReceiver, stopClientSend)
@@ -111,7 +112,7 @@ func (hc *Connector) respondUntilHandoff(client *Client) {
 			if err != nil {
 				returnMessage = toOriginWithStatus(msg, websocketcodes.StatusFailure, "failed to retrieve hub")
 			} else {
-				hub.registerUser(client, hc.clientQueue)
+				hub.registerClient(client, hc.clientQueue)
 				return
 			}
 		case endpointHubCreate:
@@ -122,7 +123,7 @@ func (hc *Connector) respondUntilHandoff(client *Client) {
 					log.Printf("Error while generating new hub code: %#v", err.Error())
 					continue
 				}
-				hub.registerUser(client, hc.clientQueue)
+				hub.registerClient(client, hc.clientQueue)
 				return
 			}
 			// If we're here, we continued every loop and failed to make a hub

@@ -1,6 +1,10 @@
+// Package collabauth deals with checking the authorization of actions against the user's role.
+// Currently depends on a Firestore backend.
+// TODO: remove the dependency on Firebase and instead assume some generic datastore/user collection.
 package collabauth
 
 import (
+	log "collabserver/cloudlog"
 	"collabserver/collections"
 	"collabserver/hubcodes"
 	"collabserver/storage"
@@ -46,6 +50,7 @@ type Authenticator interface {
 // datastore declares the functions that are used for interacting with Firestore
 type datastore interface {
 	DocExists(docID string, collection *firestore.CollectionRef) (bool, *firestore.DocumentRef, error)
+	EntryForFieldValue(collection *firestore.CollectionRef, fieldPath string, value, dataTo interface{}) (*firestore.DocumentRef, error)
 	CollectionIsEmpty(collection *firestore.CollectionRef) bool
 }
 
@@ -80,17 +85,15 @@ func (fa *firestoreAuthenticator) verifyAccess(userID string, op string) (bool, 
 }
 
 func (fa *firestoreAuthenticator) roleForUserID(userID string) (string, *firestore.DocumentRef, error) {
-	exists, docRef, err := fa.db.DocExists(userID, fa.authTable)
+	docRef, err := fa.db.EntryForFieldValue(fa.authTable, hubcodes.UserIDKey, userID, nil)
 	if err != nil {
+		log.Printf("error getting doc from authTable: %s", err.Error())
 		return NoRole, nil, err
-	}
-	if !exists {
-		// Not really an error, just that the user doesn't belong to the hub.
-		return NoRole, nil, nil
 	}
 	data := &collections.AuthEntry{}
 	snapshot, err := docRef.Get(context.Background())
 	if err != nil {
+		log.Printf("Error getting snapshot: %s", err.Error())
 		return NoRole, nil, err
 	}
 	snapshot.DataTo(data)
