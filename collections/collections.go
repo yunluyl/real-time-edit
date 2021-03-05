@@ -26,10 +26,20 @@ type UserInfo struct {
 	Status string `json:"status"`
 }
 
-// FileInfo contains info on a file within a hub. Only has the file name for now.
+// FileInfo contains info on a file within a hub.
 type FileInfo struct {
-	Name    string `json:"name" firestore:"name"`
-	Deleted bool   `firestore:"deleted"`
+	Name            string       `json:"name" firestore:"name"`
+	Deleted         bool         `firestore:"deleted"`
+	Snapshot        FileSnapshot `json:"snapshot" firestore:"snapshot"`
+	MarkedForUpdate bool         `json:"needsUpdate" firestore:"snapshotNeedsUpdate"`
+}
+
+// FileSnapshot holds a snapshot of a notebook file up to operation Index
+type FileSnapshot struct {
+	// The structure of the file as a JSON parsable string.
+	File string `json:"file"`
+	// The operation index of the file structure
+	Index int `json:"index"`
 }
 
 // UserToHubEntry lists the fields of a document in the userToHub collection, which allows easy

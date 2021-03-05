@@ -135,8 +135,10 @@ func (cs *collabStorage) EntryForFieldValue(collection *firestore.CollectionRef,
 		}
 		break
 	}
-
-	err := doc.DataTo(dataTo)
+	var err error
+	if dataTo != nil {
+		err = doc.DataTo(dataTo)
+	}
 	return doc.Ref, err
 }
 
@@ -151,7 +153,7 @@ func (cs *collabStorage) TopLevelCollection(collection string) *firestore.Collec
 
 // CommitOps checks that the OT operations can be committed then pushes them to the collection.
 func (cs *collabStorage) CommitOps(opsCollection *firestore.CollectionRef, idx int64, ops []string, committerID string) (string, int64, []string, string) {
-	retOps, start, err := opsForFile(opsCollection, idx, ops)
+	retOps, start, err := cs.OpsForFile(opsCollection, idx)
 	if err != nil {
 		return wscodes.StatusOperationCommitError, idx, []string{}, err.Error()
 	}
@@ -195,8 +197,8 @@ func (cs *collabStorage) CommitOps(opsCollection *firestore.CollectionRef, idx i
 	}
 }
 
-func opsForFile(opsCollection *firestore.CollectionRef, idx int64,
-	ops []string) ([]string, int64, error) {
+// OpsForFile gives the operations starting from index idx.
+func (cs *collabStorage) OpsForFile(opsCollection *firestore.CollectionRef, idx int64) ([]string, int64, error) {
 	iter := opsCollection.
 		Where("index", ">=", idx-1).
 		OrderBy("index", firestore.Asc).

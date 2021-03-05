@@ -1,3 +1,6 @@
+// Package hub contains everything used to facilitate a client's interaction with the concept
+// of a hub: the central location of collaborative files where one can edit user access and
+// view and change files.
 package hub
 
 import (
@@ -20,7 +23,11 @@ const (
 	opsID         = "operations"
 	usersToHubsID = "usersToHubs"
 
+	// The number of seconds between each update message broadcast to clients.
 	updateInterval = 2
+	// The number of operations before a file state update Pub/Sub message is sent
+	// to our Cloud Function.
+	maxOpsBeforeUpdate = 500
 )
 
 var (
@@ -32,6 +39,8 @@ var (
 	errUnauthorized         = errors.New("user not authorized to perform action")
 )
 
+// Type definitions mostly to facilitate testing; can drop in a faked struct without relying on
+// the underlying Firestore dependencies.
 type messageProcessor func(message *Message) *Message
 type userConnector func(userID string, hub string) (success bool)
 type datastore interface {
@@ -39,6 +48,7 @@ type datastore interface {
 	DocExists(docID string, collection *firestore.CollectionRef) (bool, *firestore.DocumentRef, error)
 	UpdateEntry(docRef *firestore.DocumentRef, path string, value interface{}) error
 	CommitOps(opsCollection *firestore.CollectionRef, idx int64, ops []string, committerID string) (string, int64, []string, string)
+	OpsForFile(opsCollection *firestore.CollectionRef, idx int64) ([]string, int64, error)
 	DeleteDocument(docRef *firestore.DocumentRef) error
 	CollectionForID(collectionID string, docRef *firestore.DocumentRef) *firestore.CollectionRef
 	AllUsers(collection *firestore.CollectionRef) ([]collections.UserInfo, error)
@@ -49,8 +59,7 @@ type datastore interface {
 	UpdateUsersHubList(userID, hubName, role string) error
 }
 
-// Hub maintains the set of active clients and send messages to the
-// clients based on processor rules.
+// Hub maintains the set of active clients and send messages to the clients based on processor rules.
 type Hub struct {
 	// Name of this hub
 	name string
@@ -70,22 +79,32 @@ type Hub struct {
 	// Unregister requests from clients.
 	unregister chan *Client
 
+	// Send the client through the chan on unregister to return it to the hub.Connector.
 	clientReturn map[*Client]chan *Client
 
+	// Send on the chan to stop client messages to this hub.
 	stopClientSend map[*Client]chan struct{}
 
+	// Send on this chan to stop the periodic broadcast messages to all clients of the hub;
+	// used on hub close.
 	stopPeriodicUpdates chan int
 
 	db datastore
 
+	// The DocumentRef that this hub is represented by in the datastore.
 	ref *firestore.DocumentRef
 
+	// An Authenticator instance for the hub's authentication collection.
 	auth collabauth.Authenticator
 
+	// A collection of users with ids and roles, also used for authentication.
 	users *firestore.CollectionRef
 
+	// A collection of files that hold operations subcollections and file data.
 	files *firestore.CollectionRef
 
+	// A top level collection of our database; used for quickly obtaining the hubs that a given
+	// user can access.
 	masterUsersList *firestore.CollectionRef
 }
 
@@ -124,12 +143,6 @@ func newHub(hubName, userID string, hubs *firestore.CollectionRef) (*Hub, error)
 	}
 	hub := &Hub{
 		name:            hubName,
-		isClosed:        false,
-		inbound:         make(chan *Message),
-		register:        make(chan *Client),
-		unregister:      make(chan *Client),
-		clients:         make(map[*Client]bool),
-		stopClientSend:  make(map[*Client]chan struct{}),
 		ref:             docRef,
 		db:              storage.DB,
 		masterUsersList: storage.DB.TopLevelCollection(usersToHubsID),
@@ -141,6 +154,8 @@ func newHub(hubName, userID string, hubs *firestore.CollectionRef) (*Hub, error)
 	return hub, nil
 }
 
+// createHubWithOwner will create the hub Document and insert the requester as the owner.
+// This function bypasses auth checks because it checks for hub existence first.
 func createHubWithOwner(docRef *firestore.DocumentRef, hubName, ownerID string) error {
 	_, err := docRef.Create(context.Background(), hubRef{name: hubName})
 	if err != nil {
@@ -159,6 +174,7 @@ func createHubWithOwner(docRef *firestore.DocumentRef, hubName, ownerID string) 
 	return err
 }
 
+// init sets up everything needed before Run can be called.
 func (h *Hub) init() error {
 	// Get the subcollections auth and file which should always have the same ids
 	// across hubs.
@@ -175,6 +191,11 @@ func (h *Hub) init() error {
 	h.auth = collabauth.CurrentAuthenticator(authCollection)
 	h.users = authCollection
 	h.files = fileCollection
+	h.inbound = make(chan *Message)
+	h.register = make(chan *Client)
+	h.unregister = make(chan *Client)
+	h.clients = make(map[*Client]bool)
+	h.stopClientSend = make(map[*Client]chan struct{})
 
 	h.clientReturn = make(map[*Client]chan *Client)
 
@@ -193,12 +214,13 @@ func (h *Hub) Run() {
 				return
 			}
 
+			// Set up for if the client disconnects from the hub.
 			h.stopClientSend[client] = make(chan struct{})
 			client.assignChans(h.inbound, h.stopClientSend[client])
 			// The minimum permissions for hub access is read access.
 			if err := h.ConnectUser(client.userID); err != nil {
 				log.Printf("User %s does not have permission to access hub %s: %v", client.userID, h.name, err)
-				h.closeClient(client)
+				h.unregisterClient(client)
 				break
 			}
 			h.clients[client] = true
@@ -209,10 +231,7 @@ func (h *Hub) Run() {
 			}
 			log.Print("returning client to connector")
 			if _, ok := h.clients[client]; ok {
-				h.DisconnectUser(client.userID)
-				h.clientReturn[client] <- client
-				delete(h.clientReturn, client)
-				h.removeClient(client)
+				h.unregisterClient(client)
 			}
 		case message, ok := <-h.inbound:
 			// Auth check is in processMessage.
@@ -225,7 +244,7 @@ func (h *Hub) Run() {
 	}
 }
 
-func (h *Hub) registerUser(client *Client, returnClient chan *Client) {
+func (h *Hub) registerClient(client *Client, returnClient chan *Client) {
 	if h.IsClosed() {
 		log.Print("register client failed because hub is closed")
 		return
@@ -235,6 +254,14 @@ func (h *Hub) registerUser(client *Client, returnClient chan *Client) {
 	h.register <- client
 }
 
+func (h *Hub) unregisterClient(client *Client) {
+	h.DisconnectUser(client.userID)
+	h.clientReturn[client] <- client
+	delete(h.clientReturn, client)
+	h.removeClient(client)
+}
+
+// determines where to send the message based on message.Route
 func (h *Hub) handleSendMessage(message *Message, origin *Client) {
 	if message == nil {
 		// No op
@@ -261,23 +288,29 @@ func (h *Hub) handleSendMessage(message *Message, origin *Client) {
 	}
 }
 
+// sendMessage first checks if the message can be sent to the client.
 func (h *Hub) sendMessage(client *Client, message *Message) {
 	if client == nil {
 		return
 	}
 	if client.IsClosed() {
-		h.closeClient(client)
+		h.unregisterClient(client)
 		return
 	}
 	select {
 	case client.send <- message:
 	default:
-		h.closeClient(client)
+		h.unregisterClient(client)
 	}
 }
 
+// startPeriodicUpdates currently sends a list of all users in this hub to all
+// connected clients.
+// There are some periodic updates like the hub's file list that are polled for on the client side
+// due to how JupyterLab polls for directory contents.
 func (h *Hub) startPeriodicUpdates() {
 	ticker := time.NewTicker(updateInterval * time.Second)
+	// for closing the goroutine.
 	h.stopPeriodicUpdates = make(chan int)
 	for {
 		select {
@@ -313,10 +346,6 @@ func (h *Hub) handBackClient(client *Client) {
 	h.unregister <- client
 }
 
-func (h *Hub) closeClient(client *Client) {
-	h.removeClient(client)
-}
-
 func (h *Hub) removeClient(client *Client) {
 	close(h.stopClientSend[client])
 	delete(h.stopClientSend, client)
@@ -328,7 +357,7 @@ func (h *Hub) removeClient(client *Client) {
 
 func (h *Hub) closeHub() {
 	for client := range h.clients {
-		h.closeClient(client)
+		h.unregisterClient(client)
 	}
 	close(h.register)
 	close(h.unregister)

@@ -14,4 +14,5 @@ require (
 	google.golang.org/api v0.39.0
 	google.golang.org/genproto v0.0.0-20210207032614-bba0dbe2a9ea // indirect
 	google.golang.org/grpc v1.35.0
+	cloud.google.com/go/pubsub v1.3.1
 )

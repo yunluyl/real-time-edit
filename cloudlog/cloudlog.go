@@ -1,4 +1,5 @@
-// Package cloudlog takes care of setting up a Google Cloud logger.
+// Package cloudlog takes care of setting up a Google Cloud logger. It follows most of the Logger interface,
+// and logs both to terminal and to the Cloud.
 package cloudlog
 
 import (

@@ -38,8 +38,10 @@ var upgrader = websocket.Upgrader{
 type Client struct {
 	userID string
 
+	// Send self through this channel to disconnect from the hub.
 	unregister chan *Client
 
+	// The channel to send messages from the client to.
 	toBackend chan *Message
 
 	// The websocket connection.
@@ -48,6 +50,9 @@ type Client struct {
 	// Buffered channel of outbound messages.
 	send chan *Message
 
+	// Used as an indication from the hub to stop sending on toBackend. Follows the general rule of
+	// not sending on closed channels (which causes program crashing panics).
+	// When this chan is closed, all reads will resolve immediately with the second return equaling false.
 	stopCh chan struct{}
 
 	closed bool
@@ -138,15 +143,16 @@ func (c *Client) Unregister() error {
 	if c.unregister == nil {
 		return errNoHub
 	}
-
+	// We check stopCh twice to ensure that we read a stop request before attempting to read
+	// from a potentially closed chan (c.toBackend)
 	select {
 	case <-c.stopCh:
-		return fmt.Errorf("client receieved stop send request")
+		return fmt.Errorf("client received stop send request")
 	default:
 	}
 	select {
 	case <-c.stopCh:
-		return fmt.Errorf("client receieved stop send request")
+		return fmt.Errorf("client received stop send request")
 	case c.unregister <- c:
 	}
 
@@ -163,14 +169,16 @@ func (c *Client) clientToBackend(message *Message) error {
 	if c.toBackend == nil {
 		return errNoBackendChan
 	}
+	// We check stopCh twice to ensure that we read a stop request before attempting to read
+	// from a potentially closed chan (c.toBackend)
 	select {
 	case <-c.stopCh:
-		return fmt.Errorf("client receieved stop send request")
+		return fmt.Errorf("client received stop send request")
 	default:
 	}
 	select {
 	case <-c.stopCh:
-		return fmt.Errorf("client receieved stop send request")
+		return fmt.Errorf("client received stop send request")
 	case c.toBackend <- message:
 	}
 

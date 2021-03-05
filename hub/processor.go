@@ -5,6 +5,7 @@ import (
 	"collabserver/collabauth"
 	"collabserver/collections"
 	"collabserver/hubcodes"
+	"collabserver/remotejob"
 	wscodes "collabserver/websocketcodes"
 	"context"
 	"errors"
@@ -17,6 +18,8 @@ func (h *Hub) processMessage(message *Message) *Message {
 	switch message.Endpoint {
 	case endpointPassthrough:
 		return message
+	case endpointFileRetrieve:
+		return h.handleFileRetrieve(message)
 	case endpointFileUpdate:
 		return h.handleFileUpdate(message)
 	case endpointFileCreate:
@@ -46,6 +49,53 @@ func (h *Hub) processMessage(message *Message) *Message {
 	}
 }
 
+func (h *Hub) handleFileRetrieve(message *Message) *Message {
+	if ok, _ := h.auth.CanCommit(message.client.userID); !ok {
+		return toOriginWithStatus(message, wscodes.StatusEndpointUnauthorized, "")
+	}
+	data := collections.FileInfo{}
+	docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, &data)
+	if err != nil {
+		log.Printf("error from refForFilename: %s", err.Error())
+		return toOriginWithStatus(message, wscodes.StatusFileDoesntExist, err.Error())
+	}
+	// A bit of incrementing here because OpsFor File gives ops starting from idx-1, and
+	// the snapshot's index is the index of the latest op it's updated to (i.e. if the latest op is
+	// index 1, and snapshot is caught up then snapshot.Index == 1). Leaving it as is will cause it
+	// to replay the last two ops on top of the current file state.
+	idx := int64(data.Snapshot.Index) + 2
+	ops, _, err := h.db.OpsForFile(h.db.CollectionForID(opsID, docRef), idx)
+	if err != nil {
+		return toOriginWithStatus(message, wscodes.StatusFailure, err.Error())
+	}
+
+	returnMessage := toOriginWithStatus(message, wscodes.StatusSuccess, "")
+
+	if idx == -1 && len(ops) == 0 {
+		// File is empty and needs an initial file state
+		// commit message's filestate
+		if message.FileState != "" {
+			err := h.db.UpdateEntry(docRef, "snapshot", collections.FileSnapshot{File: message.FileState})
+			if err != nil {
+				log.Printf("Updating intial file state failed: %#v", err)
+				returnMessage.FileState = data.Snapshot.File
+			} else {
+				returnMessage.FileState = message.FileState
+			}
+		} else {
+			log.Printf("handleFileRetrieve attempted to set initial file state but message had empty FileState: %#v", message)
+		}
+	} else {
+		returnMessage.FileState = data.Snapshot.File
+	}
+
+	returnMessage.Operations = ops
+	returnMessage.Index = idx - 2
+	returnMessage.File = message.File
+
+	return returnMessage
+}
+
 func (h *Hub) handleFileUpdate(message *Message) *Message {
 	ret := &Message{
 		UID:      message.UID,
@@ -63,18 +113,34 @@ func (h *Hub) handleFileUpdate(message *Message) *Message {
 		status = wscodes.StatusEndpointUnauthorized
 	} else {
 		// Next find the document reference for the file.
-		file, err := h.refForFilename(message.File)
+		data := collections.FileInfo{}
+		docRef, err := h.db.EntryForFieldValue(h.files, hubcodes.FileNameKey, message.File, &data)
 		if err != nil {
 			log.Printf("error from refForFilename: %s", err.Error())
 			status = wscodes.StatusFileDoesntExist
 			text = err.Error()
 		} else {
+			file := h.db.CollectionForID(opsID, docRef)
 			// Commit the operations since the previous two checks succeeded.
 			status, idx, retOps, text = h.db.CommitOps(
 				file,
 				message.Index,
 				message.Operations,
-				message.client.userID)
+				message.client.userID,
+			)
+			
+			// check the latest operation index against data.Index
+			if !data.MarkedForUpdate && status == wscodes.StatusOperationCommitted {
+				latestOpIndex := int(idx) + len(retOps)
+				if latestOpIndex - data.Snapshot.Index > maxOpsBeforeUpdate {
+					// mark it as needing an update; the remote service will read and perform
+					// the necessary transaction atomically (i.e. if this is called multiple times and
+					// one of the runs finishes then all other runs will terminate without any writes).
+					h.db.UpdateEntry(docRef, hubcodes.FileUpdateKey, true)
+					remotejob.FileUpdateRequest(h.name, message.File)
+				}
+			}
+
 		}
 	}
 
@@ -143,7 +209,10 @@ func (h *Hub) handleFileCreate(message *Message) *Message {
 		return toOriginWithStatus(message, wscodes.StatusFileExists, "")
 	}
 	// Proceed with creating the file.
-	fileEntry = &collections.FileInfo{Name: message.File}
+	fileEntry = &collections.FileInfo{
+		Name:     message.File,
+		Snapshot: collections.FileSnapshot{Index: -1},
+	}
 	_, err = h.db.AddEntry(h.files, "", fileEntry)
 	if err != nil {
 		return toOriginWithStatus(message, wscodes.StatusFileCreateFailed, "")
@@ -183,7 +252,8 @@ func (h *Hub) handleModifyUser(message *Message) *Message {
 	var err error
 	switch message.ModifyUserType {
 	case userAdd:
-		err = h.AddUser(message.ModifyUserID, message.client.userID, collabauth.Viewer)
+		// TODO(itsazhuhere@): Change this back to collabauth.Reader; temporarily changed to writer for demo.
+		err = h.AddUser(message.ModifyUserID, message.client.userID, collabauth.Writer)
 	case userModify:
 		err = h.AddUser(message.ModifyUserID, message.client.userID, message.ModifyUserRole)
 	case userRemove:
@@ -250,6 +320,7 @@ func (h *Hub) listFiles(requester string) ([]collections.FileInfo, error) {
 // AddUser adds a user, after first checking if requester is able to add users.
 // Since a hub requires an owner on init, calling this function should mean at least one owner exists.
 func (h *Hub) AddUser(toAdd, requester, role string) error {
+	log.Printf("Adding user %s as %s to hub %s requested by %s", toAdd, role, h.name, requester)
 	ok, _ := h.auth.CanChangeUsers(requester)
 	if !ok {
 		log.Print("User can't change other users")
@@ -263,6 +334,7 @@ func (h *Hub) AddUser(toAdd, requester, role string) error {
 	if userID, ok = userIDs[toAdd]; !ok {
 		return errors.New("Email not found")
 	}
+	log.Printf("Got id from email: %s", userID)
 	authEntry := &collections.AuthEntry{}
 	// Currenly just using this for checking for the existence of docRef.
 	docRef, _ := h.db.EntryForFieldValue(h.users, hubcodes.UserIDKey, userID, authEntry)
